@@ -1,24 +1,18 @@
-//
-//  ContentView.swift
-//  CircleSearch
-//
-//  Created by Medidala Aditya on 15/05/26.
-//
-
 import SwiftUI
+import KeyboardShortcuts
 
 struct ContentView: View {
     var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
+        VStack(alignment: .leading, spacing: 10) {
+            KeyboardShortcuts.Recorder("Capture shortcut:", name: .triggerCapture)
+                .padding(.bottom, 2)
+            Divider()
+            Button("Quit CircleSearch") {
+                NSApp.terminate(nil)
+            }
+            .keyboardShortcut("q")
         }
         .padding()
+        .frame(width: 260)
     }
-}
-
-#Preview {
-    ContentView()
 }
