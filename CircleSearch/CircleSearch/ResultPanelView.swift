@@ -11,12 +11,21 @@ struct ResultPanelView: View {
     // MARK: Local UI state
 
     @State private var appeared       = false
-    @State private var isOCRExpanded  = false
-    @State private var showFollowUp   = false
+    @State private var isOCRExpanded: Bool          // initialized in init based on OCR length
     @State private var followUpText   = ""
     @State private var copyTextLabel  = "Copy Text"
     @State private var copyAILabel    = "Copy AI"
     @FocusState private var followUpFocused: Bool
+
+    // MARK: Init
+
+    init(model: ResultPanelModel, onDismiss: @escaping () -> Void, onNewCapture: @escaping () -> Void) {
+        self.model        = model
+        self.onDismiss    = onDismiss
+        self.onNewCapture = onNewCapture
+        // Auto-expand OCR section for short captures (≤ 200 chars).
+        _isOCRExpanded = State(initialValue: model.ocrText.count <= 200)
+    }
 
     // MARK: Body
 
@@ -27,10 +36,7 @@ struct ResultPanelView: View {
             aiSection
             Divider().opacity(0.4)
             buttonRow
-            if showFollowUp {
-                followUpSection
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
+            followUpSection
         }
         .frame(width: 440)
         .background(Color(NSColor.windowBackgroundColor).opacity(0.85))
@@ -38,13 +44,14 @@ struct ResultPanelView: View {
         .scaleEffect(appeared ? 1 : 0.95, anchor: .top)
         .animation(.easeOut(duration: 0.15), value: appeared)
         .onAppear { appeared = true }
-        .onChange(of: showFollowUp) { _, isShowing in
-            if isShowing { followUpFocused = true }
-        }
         .onChange(of: model.isStreaming) { wasStreaming, isStreaming in
             if wasStreaming && !isStreaming {
                 NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .aiResponseCopied)) { _ in
+            copyAILabel = "Copied!"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copyAILabel = "Copy AI" }
         }
     }
 
@@ -152,15 +159,6 @@ struct ResultPanelView: View {
                 .controlSize(.small)
                 .disabled(model.aiResponse.isEmpty)
 
-            // Ask follow-up
-            Button(showFollowUp ? "Cancel" : "Ask follow-up") {
-                withAnimation(.easeInOut(duration: 0.2)) { showFollowUp.toggle() }
-                if showFollowUp { followUpText = "" }
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .disabled(model.client == nil || model.isStreaming)
-
             // Search Google (searches OCR text)
             Button {
                 searchGoogle()
@@ -201,12 +199,14 @@ struct ResultPanelView: View {
 
     private var followUpSection: some View {
         HStack(spacing: 8) {
-            TextField("Ask a follow-up question…", text: $followUpText)
+            TextField("Continue the conversation…", text: $followUpText)
                 .textFieldStyle(.roundedBorder)
                 .focused($followUpFocused)
                 .onSubmit { submitFollowUp() }
+                .disabled(model.client == nil || model.isStreaming)
             Button("Send") { submitFollowUp() }
-                .disabled(followUpText.trimmingCharacters(in: .whitespaces).isEmpty)
+                .disabled(followUpText.trimmingCharacters(in: .whitespaces).isEmpty
+                          || model.client == nil || model.isStreaming)
         }
         .padding(.horizontal, 12)
         .padding(.bottom, 10)
@@ -241,7 +241,6 @@ struct ResultPanelView: View {
         let text = followUpText.trimmingCharacters(in: .whitespaces)
         guard !text.isEmpty else { return }
         followUpText = ""
-        showFollowUp = false
         model.submitFollowUp(text: text)
     }
 }

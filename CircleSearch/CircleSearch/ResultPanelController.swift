@@ -1,6 +1,16 @@
 import AppKit
 import SwiftUI
 
+// MARK: - ResultPanel
+
+/// NSPanel subclass that allows the panel to become key window so SwiftUI controls
+/// (e.g. TextField) inside it can receive keyboard focus, while still using
+/// `.nonactivatingPanel` so the panel doesn't steal app activation from the user's work.
+private final class ResultPanel: NSPanel {
+    override var canBecomeKey: Bool  { true  }
+    override var canBecomeMain: Bool { false }
+}
+
 // MARK: - ResultPanelModel
 
 /// Observable model that drives the result panel UI.
@@ -158,7 +168,7 @@ final class ResultPanelController: NSObject {
 
         let newPanel = makePanel()
         newPanel.contentView = effectView
-        newPanel.setContentSize(NSSize(width: 440, height: 360))
+        newPanel.setContentSize(NSSize(width: 440, height: 400))
 
         position(newPanel, near: selectionRect)
 
@@ -187,20 +197,21 @@ final class ResultPanelController: NSObject {
     // MARK: Private — panel construction
 
     private func makePanel() -> NSPanel {
-        let p = NSPanel(
+        let p = ResultPanel(
             contentRect: .zero,
             styleMask:   [.nonactivatingPanel, .borderless],
             backing:     .buffered,
             defer:       false
         )
-        p.backgroundColor          = .clear
-        p.isOpaque                 = false
-        p.hasShadow                = true
-        p.isFloatingPanel          = true
-        p.level                    = .floating
-        p.isReleasedWhenClosed     = false
+        p.backgroundColor             = .clear
+        p.isOpaque                    = false
+        p.hasShadow                   = true
+        p.isFloatingPanel             = true
+        p.level                       = .floating
+        p.isReleasedWhenClosed        = false
         p.isMovableByWindowBackground = true
-        p.collectionBehavior       = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        p.becomesKeyOnlyIfNeeded      = true
+        p.collectionBehavior          = [.canJoinAllSpaces, .fullScreenAuxiliary]
         return p
     }
 
@@ -247,11 +258,21 @@ final class ResultPanelController: NSObject {
                 Task { @MainActor in self.dismiss() }
             }
         }
-        // Local Escape key → dismiss.
+        // Local key monitor: Escape → dismiss; Cmd+C → copy AI response if non-empty.
         localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            if event.keyCode == 53 {   // Escape
+            if event.keyCode == 53 {   // Escape (keyCode is correct for non-character keys)
                 Task { @MainActor in self?.dismiss() }
                 return nil
+            }
+            if event.modifierFlags.contains(.command),
+               event.charactersIgnoringModifiers?.lowercased() == "c" {
+                let response = MainActor.assumeIsolated { self?.model?.aiResponse ?? "" }
+                if !response.isEmpty {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(response, forType: .string)
+                    NotificationCenter.default.post(name: .aiResponseCopied, object: nil)
+                    return nil
+                }
             }
             return event
         }
@@ -261,4 +282,10 @@ final class ResultPanelController: NSObject {
         if let m = globalClickMonitor { NSEvent.removeMonitor(m); globalClickMonitor = nil }
         if let m = localKeyMonitor    { NSEvent.removeMonitor(m); localKeyMonitor    = nil }
     }
+}
+
+// MARK: - Notifications
+
+extension Notification.Name {
+    static let aiResponseCopied = Notification.Name("CircleSearch.aiResponseCopied")
 }

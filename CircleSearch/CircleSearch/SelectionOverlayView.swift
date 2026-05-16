@@ -24,6 +24,32 @@ final class SelectionOverlayView: NSView {
 
     override var acceptsFirstResponder: Bool { true }
 
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard window != nil else { return }
+
+        wantsLayer = true
+        guard let layer else { return }
+
+        // Scale-up entrance animation: 98 % → 100 %, invisible → opaque, 80 ms ease-out.
+        let scaleAnim = CABasicAnimation(keyPath: "transform")
+        scaleAnim.fromValue = CATransform3DMakeScale(0.98, 0.98, 1)
+        scaleAnim.toValue   = CATransform3DIdentity
+        scaleAnim.duration  = 0.08
+        scaleAnim.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        scaleAnim.fillMode  = .backwards
+
+        let opacityAnim = CABasicAnimation(keyPath: "opacity")
+        opacityAnim.fromValue = 0
+        opacityAnim.toValue   = 1
+        opacityAnim.duration  = 0.08
+        opacityAnim.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        opacityAnim.fillMode  = .backwards
+
+        layer.add(scaleAnim,   forKey: "appear-scale")
+        layer.add(opacityAnim, forKey: "appear-opacity")
+    }
+
     override func resetCursorRects() {
         addCursorRect(bounds, cursor: .crosshair)
     }

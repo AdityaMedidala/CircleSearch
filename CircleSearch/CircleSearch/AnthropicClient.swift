@@ -51,11 +51,21 @@ struct AnthropicClient {
                     for try await line in bytes.lines {
                         guard line.hasPrefix("data: ") else { continue }
                         let payload = String(line.dropFirst(6))
+
+                        // Anthropic sends message_stop to signal the end of the stream.
+                        // Detect it explicitly so the loop exits rather than hanging.
+                        if let data  = payload.data(using: .utf8),
+                           let event = try? JSONDecoder().decode(SSEEvent.self, from: data),
+                           event.type == "message_stop" {
+                            continuation.finish()
+                            return
+                        }
+
                         if let text = parseTextDelta(from: payload) {
                             continuation.yield(text)
                         }
                     }
-                    continuation.finish()
+                    continuation.finish()   // fallback if the loop exits without message_stop
                 } catch {
                     continuation.finish(throwing: error)
                 }
