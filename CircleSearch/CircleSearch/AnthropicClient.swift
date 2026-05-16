@@ -33,12 +33,22 @@ struct AnthropicClient {
         AsyncThrowingStream { continuation in
             Task {
                 do {
+                    NSLog("CircleSearch: stream() called with %d messages, model: %@, key prefix: %@",
+                          messages.count, model, String(apiKey.prefix(10)))
+
                     let request = try buildRequest(messages: messages)
                     let (bytes, response) = try await URLSession.shared.bytes(for: request)
 
-                    if let http = response as? HTTPURLResponse, http.statusCode != 200 {
-                        continuation.finish(throwing: AnthropicError.httpError(http.statusCode))
-                        return
+                    if let http = response as? HTTPURLResponse {
+                        NSLog("CircleSearch: stream — HTTP status: %d", http.statusCode)
+                        if http.statusCode != 200 {
+                            var bodyData = Data()
+                            for try await byte in bytes { bodyData.append(byte) }
+                            let bodyString = String(data: bodyData, encoding: .utf8) ?? "(non-UTF8 body)"
+                            NSLog("CircleSearch: stream — error body: %@", bodyString)
+                            continuation.finish(throwing: AnthropicError.httpError(http.statusCode))
+                            return
+                        }
                     }
 
                     for try await line in bytes.lines {
@@ -46,6 +56,7 @@ struct AnthropicClient {
                         let payload = String(line.dropFirst(6))
                         if let text = parseTextDelta(from: payload) {
                             continuation.yield(text)
+                            NSLog("CircleSearch: stream — yielded token")
                         }
                     }
                     continuation.finish()
@@ -59,11 +70,49 @@ struct AnthropicClient {
     // MARK: Image encoding
 
     /// Encodes a `CGImage` as a PNG and returns the base64 string.
+    /// Downsamples to a 1568px long edge before encoding — Anthropic's documented
+    /// vision recommendation — so large Retina captures don't exceed the payload limit.
     static func pngBase64(from image: CGImage) throws -> String {
-        let rep = NSBitmapImageRep(cgImage: image)
+        let maxLongEdge: CGFloat = 1568
+        let w = CGFloat(image.width)
+        let h = CGFloat(image.height)
+        let longEdge = max(w, h)
+
+        let finalImage: CGImage
+        if longEdge > maxLongEdge {
+            let scale = maxLongEdge / longEdge
+            let newW  = Int((w * scale).rounded())
+            let newH  = Int((h * scale).rounded())
+
+            guard let colorSpace = image.colorSpace,
+                  let context = CGContext(
+                      data: nil,
+                      width: newW,
+                      height: newH,
+                      bitsPerComponent: 8,
+                      bytesPerRow: 0,
+                      space: colorSpace,
+                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                  ) else {
+                throw ConversionError.pngFailed
+            }
+            context.interpolationQuality = .high
+            context.draw(image, in: CGRect(x: 0, y: 0, width: newW, height: newH))
+            guard let scaled = context.makeImage() else {
+                throw ConversionError.pngFailed
+            }
+            finalImage = scaled
+        } else {
+            finalImage = image
+        }
+
+        let rep = NSBitmapImageRep(cgImage: finalImage)
         guard let data = rep.representation(using: .png, properties: [:]) else {
             throw ConversionError.pngFailed
         }
+
+        NSLog("CircleSearch: encoded image %dx%d → %d KB base64",
+              finalImage.width, finalImage.height, data.count * 4 / 3 / 1024)
         return data.base64EncodedString()
     }
 

@@ -16,6 +16,7 @@ struct ResultPanelView: View {
     @State private var followUpText   = ""
     @State private var copyTextLabel  = "Copy Text"
     @State private var copyAILabel    = "Copy AI"
+    @FocusState private var followUpFocused: Bool
 
     // MARK: Body
 
@@ -32,10 +33,19 @@ struct ResultPanelView: View {
             }
         }
         .frame(width: 440)
+        .background(Color(NSColor.windowBackgroundColor).opacity(0.85))
         .opacity(appeared ? 1 : 0)
         .scaleEffect(appeared ? 1 : 0.95, anchor: .top)
         .animation(.easeOut(duration: 0.15), value: appeared)
         .onAppear { appeared = true }
+        .onChange(of: showFollowUp) { _, isShowing in
+            if isShowing { followUpFocused = true }
+        }
+        .onChange(of: model.isStreaming) { wasStreaming, isStreaming in
+            if wasStreaming && !isStreaming {
+                NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+            }
+        }
     }
 
     // MARK: OCR section
@@ -44,12 +54,15 @@ struct ResultPanelView: View {
         DisclosureGroup(isExpanded: $isOCRExpanded) {
             Text(model.ocrText.isEmpty ? "No text found." : model.ocrText)
                 .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(.primary)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, 4)
+                .padding(.horizontal, 4)
         } label: {
             Label("Extracted Text", systemImage: "text.alignleft")
                 .font(.callout.weight(.medium))
+                .foregroundStyle(.primary)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
@@ -130,13 +143,13 @@ struct ResultPanelView: View {
         HStack(spacing: 6) {
             // Copy OCR text
             Button(copyTextLabel) { copyText() }
-                .buttonStyle(.borderless)
-                .font(.callout)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
 
             // Copy AI response
             Button(copyAILabel) { copyAI() }
-                .buttonStyle(.borderless)
-                .font(.callout)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
                 .disabled(model.aiResponse.isEmpty)
 
             // Ask follow-up
@@ -144,8 +157,8 @@ struct ResultPanelView: View {
                 withAnimation(.easeInOut(duration: 0.2)) { showFollowUp.toggle() }
                 if showFollowUp { followUpText = "" }
             }
-            .buttonStyle(.borderless)
-            .font(.callout)
+            .buttonStyle(.bordered)
+            .controlSize(.small)
             .disabled(model.client == nil || model.isStreaming)
 
             // Search Google (searches OCR text)
@@ -190,6 +203,7 @@ struct ResultPanelView: View {
         HStack(spacing: 8) {
             TextField("Ask a follow-up question…", text: $followUpText)
                 .textFieldStyle(.roundedBorder)
+                .focused($followUpFocused)
                 .onSubmit { submitFollowUp() }
             Button("Send") { submitFollowUp() }
                 .disabled(followUpText.trimmingCharacters(in: .whitespaces).isEmpty)

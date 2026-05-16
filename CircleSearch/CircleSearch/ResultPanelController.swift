@@ -31,6 +31,8 @@ final class ResultPanelModel {
     // MARK: Actions
 
     func startInitialAnalysis() {
+        NSLog("CircleSearch: startInitialAnalysis called, client is %@",
+              client == nil ? "nil" : "present")
         guard let client else { return }
         do {
             let b64  = try AnthropicClient.pngBase64(from: image)
@@ -122,8 +124,15 @@ final class ResultPanelController: NSObject {
     func show(image: CGImage, ocrText: String, near selectionRect: NSRect) {
         dismiss()
 
+        // Diagnostic: surface Keychain load result and service identity.
+        let rawKey = KeychainManager.load()
+        NSLog("CircleSearch: ResultPanelController.show — KeychainManager.load() = %@",
+              rawKey == nil ? "nil" : "loaded \(rawKey!.count) chars")
+        NSLog("CircleSearch: ResultPanelController.show — bundle ID = %@",
+              Bundle.main.bundleIdentifier ?? "(nil)")
+
         // Build the model for this capture session.
-        let apiKey     = KeychainManager.load()
+        let apiKey     = rawKey
         let modelID    = UserDefaults.standard.string(forKey: "selectedModel")
                       ?? AnthropicClient.defaultModel
         let client     = apiKey.map { AnthropicClient(apiKey: $0, model: modelID) }
@@ -201,11 +210,11 @@ final class ResultPanelController: NSObject {
 
     private func makeEffectView() -> NSVisualEffectView {
         let v = NSVisualEffectView()
-        v.material      = .popover
+        v.material      = .hudWindow
         v.blendingMode  = .behindWindow
         v.state         = .active
         v.wantsLayer    = true
-        v.layer?.cornerRadius  = 12
+        v.layer?.cornerRadius  = 14
         v.layer?.masksToBounds = true
         return v
     }
@@ -231,10 +240,14 @@ final class ResultPanelController: NSObject {
     // MARK: Private — event monitors
 
     private func installMonitors() {
-        // Global left-click outside the panel → dismiss.
+        // Global left-click outside any visible app window → dismiss.
+        // Checking all app windows (result panel, Settings, etc.) prevents the
+        // monitor from dismissing the panel when the user clicks within our own UI.
         globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] _ in
-            guard let self, let panel = self.panel else { return }
-            if !panel.frame.contains(NSEvent.mouseLocation) {
+            guard let self else { return }
+            let loc = NSEvent.mouseLocation
+            let insideApp = NSApp.windows.contains { $0.isVisible && $0.frame.contains(loc) }
+            if !insideApp {
                 Task { @MainActor in self.dismiss() }
             }
         }

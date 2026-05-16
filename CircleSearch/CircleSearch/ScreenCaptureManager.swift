@@ -16,13 +16,38 @@ enum ScreenCaptureManager {
     ///   1. Subtract `screen.frame.origin` to get display-local Cocoa coords.
     ///   2. Flip Y: `displayY = screen.frame.height − (localY + rect.height)`.
     static func capture(rect: NSRect, on screen: NSScreen) async throws -> CGImage {
-        // Prompt / verify permission early; SCShareableContent will also throw if denied.
-        if !CGPreflightScreenCaptureAccess() {
-            _ = CGRequestScreenCaptureAccess()
-            throw CaptureError.permissionDenied
-        }
+        // Let SCShareableContent throw naturally — this triggers the modern macOS
+        // permission prompt. We only map the specific permission-denied codes to
+        // CaptureError.permissionDenied; all other failures are rethrown as-is so
+        // they don't mislead users into toggling an unrelated privacy setting.
+        let content: SCShareableContent
+        do {
+            content = try await SCShareableContent.current
+        } catch {
+            let ns = error as NSError
+            NSLog("CircleSearch: SCShareableContent failed — domain=%@ code=%d description=%@",
+                  ns.domain, ns.code, error.localizedDescription)
 
-        let content = try await SCShareableContent.current
+            let isPermissionDenied: Bool = {
+                // Explicit Swift-typed user denial.
+                if let scErr = error as? SCStreamError, scErr.code == .userDeclined {
+                    return true
+                }
+                // Older permission-related codes under com.apple.ScreenCaptureKit.
+                if ns.domain == "com.apple.ScreenCaptureKit" && [-3801, -3802, -3803].contains(ns.code) {
+                    return true
+                }
+                // Belt-and-suspenders: SCStreamErrorDomain + userDeclined raw value
+                // catches the NSError-bridged form of the same denial.
+                if ns.domain == SCStreamErrorDomain && ns.code == SCStreamError.Code.userDeclined.rawValue {
+                    return true
+                }
+                return false
+            }()
+
+            if isPermissionDenied { throw CaptureError.permissionDenied }
+            throw error
+        }
 
         // Match the NSScreen to its SCDisplay via the CGDirectDisplayID.
         guard

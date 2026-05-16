@@ -93,7 +93,14 @@ private struct APITab: View {
         }
         .formStyle(.grouped)
         .padding()
-        .onAppear { apiKey = KeychainManager.load() ?? "" }
+        .onAppear {
+            let rawKey = KeychainManager.load()
+            NSLog("CircleSearch: APITab.onAppear — KeychainManager.load() = %@",
+                  rawKey == nil ? "nil" : "loaded \(rawKey!.count) chars")
+            NSLog("CircleSearch: APITab.onAppear — bundle ID = %@",
+                  Bundle.main.bundleIdentifier ?? "(nil)")
+            apiKey = rawKey ?? ""
+        }
     }
 
     private func saveKey() {

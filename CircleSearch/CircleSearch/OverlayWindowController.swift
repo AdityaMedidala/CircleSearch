@@ -1,5 +1,14 @@
 import AppKit
 
+// Borderless NSWindows return false from canBecomeKeyWindow by default, which
+// prevents them from receiving keyboard events (Escape, etc.). This subclass
+// opts in explicitly while refusing main-window status (we're an overlay).
+private final class OverlayWindow: NSWindow {
+    override var canBecomeKey:  Bool { true  }
+    override var canBecomeMain: Bool { false }
+    override var acceptsFirstResponder: Bool { true }
+}
+
 /// Creates one borderless, transparent, screen-saver-level NSWindow per display,
 /// runs the rubber-band selection flow, then hands the captured rect off to
 /// ScreenCaptureManager → OCRManager → ResultPanelController.
@@ -17,7 +26,9 @@ final class OverlayWindowController: NSObject {
     // MARK: Public
 
     func showOverlay() {
-        guard overlayWindows.isEmpty else { return }
+        // Always clean up any stale overlays first — e.g. if a previous capture
+        // cycle exited without reaching dismissOverlay (error path, rapid re-trigger).
+        cleanup()
 
         previousApp = NSWorkspace.shared.frontmostApplication
 
@@ -35,7 +46,7 @@ final class OverlayWindowController: NSObject {
 
     private func makeOverlayWindow(for screen: NSScreen) -> NSWindow {
         // Window frame = entire screen in global Cocoa coordinates.
-        let window = NSWindow(
+        let window = OverlayWindow(
             contentRect: screen.frame,
             styleMask: .borderless,
             backing: .buffered,
@@ -55,16 +66,17 @@ final class OverlayWindowController: NSObject {
             self?.handleSelection(viewRect, on: screen)
         }
         view.onCancel = { [weak self] in
-            self?.dismissOverlay()
+            self?.cleanup()
         }
 
         window.contentView = view
+        window.makeFirstResponder(view)
         window.orderFrontRegardless()
         return window
     }
 
     private func handleSelection(_ viewRect: NSRect, on screen: NSScreen) {
-        dismissOverlay()
+        cleanup()
 
         // Convert from view-local coordinates to global Cocoa screen coordinates.
         // The overlay window's content area starts at screen.frame.origin, so:
@@ -86,7 +98,7 @@ final class OverlayWindowController: NSObject {
         }
     }
 
-    private func dismissOverlay() {
+    private func cleanup() {
         overlayWindows.forEach { $0.orderOut(nil) }
         overlayWindows.removeAll()
 
