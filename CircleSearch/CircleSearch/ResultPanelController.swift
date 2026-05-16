@@ -1,104 +1,255 @@
 import AppKit
 import SwiftUI
 
-/// Manages the floating NSPanel that displays OCR results.
+// MARK: - ResultPanelModel
+
+/// Observable model that drives the result panel UI.
+/// Owned by `ResultPanelController`; cancelled and replaced on each new capture.
+@Observable
+@MainActor
+final class ResultPanelModel {
+
+    // Panel content
+    let ocrText: String
+    let image: CGImage
+    let client: AnthropicClient?
+
+    // AI streaming state — observed by ResultPanelView
+    var aiResponse  = ""
+    var isStreaming  = false
+    var streamError: String?
+    private(set) var conversationHistory: [APIMessage] = []
+
+    private var streamTask: Task<Void, Never>?
+
+    init(ocrText: String, image: CGImage, client: AnthropicClient?) {
+        self.ocrText = ocrText
+        self.image   = image
+        self.client  = client
+    }
+
+    // MARK: Actions
+
+    func startInitialAnalysis() {
+        guard let client else { return }
+        do {
+            let b64  = try AnthropicClient.pngBase64(from: image)
+            let msgs = [APIMessage(
+                role: "user",
+                content: .blocks([
+                    ContentBlock.image(mediaType: "image/png", base64Data: b64),
+                    ContentBlock.text("Analyze this screen capture."),
+                ])
+            )]
+            conversationHistory = msgs
+            runStream(messages: msgs, client: client)
+        } catch {
+            streamError = error.localizedDescription
+        }
+    }
+
+    func submitFollowUp(text: String) {
+        guard let client else { return }
+        // Append assistant turn, then new user message.
+        if !aiResponse.isEmpty {
+            conversationHistory.append(
+                APIMessage(role: "assistant", content: .text(aiResponse))
+            )
+        }
+        conversationHistory.append(APIMessage(role: "user", content: .text(text)))
+        aiResponse = ""
+        runStream(messages: conversationHistory, client: client)
+    }
+
+    func cancel() {
+        streamTask?.cancel()
+        streamTask = nil
+    }
+
+    // MARK: Private
+
+    private func runStream(messages: [APIMessage], client: AnthropicClient) {
+        streamTask?.cancel()
+        isStreaming = true
+        streamError = nil
+
+        streamTask = Task {
+            defer { isStreaming = false }
+            do {
+                var buffer     = ""
+                var tokenCount = 0
+                var lastFlush  = Date()
+
+                for try await token in client.stream(messages: messages) {
+                    guard !Task.isCancelled else { break }
+                    buffer += token
+                    tokenCount += 1
+                    let now = Date()
+                    // Flush every 5 tokens or 50 ms, whichever comes first.
+                    if tokenCount >= 5 || now.timeIntervalSince(lastFlush) >= 0.05 {
+                        aiResponse += buffer
+                        buffer      = ""
+                        tokenCount  = 0
+                        lastFlush   = now
+                    }
+                }
+                if !buffer.isEmpty { aiResponse += buffer }
+            } catch is CancellationError {
+                // Silently cancelled — e.g. new capture or panel dismissed.
+            } catch {
+                streamError = error.localizedDescription
+            }
+        }
+    }
+}
+
+// MARK: - ResultPanelController
+
+/// Manages the lifecycle of the frosted-glass result NSPanel:
+/// creation, positioning, animation, and event monitors.
 @MainActor
 final class ResultPanelController: NSObject {
 
     static let shared = ResultPanelController()
 
     private var panel: NSPanel?
+    private var model: ResultPanelModel?
+    private var globalClickMonitor: Any?
+    private var localKeyMonitor: Any?
 
     // MARK: Public
 
-    func show(text: String, near selectionRect: NSRect) {
-        panel?.close()
+    func show(image: CGImage, ocrText: String, near selectionRect: NSRect) {
+        dismiss()
 
-        let resultView = ResultView(text: text) { [weak self] in
-            self?.panel?.orderOut(nil)
-        }
+        // Build the model for this capture session.
+        let apiKey     = KeychainManager.load()
+        let modelID    = UserDefaults.standard.string(forKey: "selectedModel")
+                      ?? AnthropicClient.defaultModel
+        let client     = apiKey.map { AnthropicClient(apiKey: $0, model: modelID) }
+        let newModel   = ResultPanelModel(ocrText: ocrText, image: image, client: client)
+        model          = newModel
 
-        let hosting = NSHostingView(rootView: resultView)
-        hosting.frame = NSRect(x: 0, y: 0, width: 380, height: 260)
-
-        let newPanel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 380, height: 260),
-            styleMask: [.titled, .closable, .resizable, .nonactivatingPanel],
-            backing: .buffered,
-            defer: false
+        // Build the visual hierarchy.
+        let panelView = ResultPanelView(
+            model:        newModel,
+            onDismiss:    { [weak self] in self?.dismiss() },
+            onNewCapture: { [weak self] in
+                self?.dismiss()
+                OverlayWindowController.shared.showOverlay()
+            }
         )
-        newPanel.title = "Extracted Text"
-        newPanel.isFloatingPanel = true
-        newPanel.level = .floating
-        newPanel.isReleasedWhenClosed = false
-        newPanel.contentView = hosting
+
+        let effectView = makeEffectView()
+        let hosting    = NSHostingView(rootView: panelView)
+        hosting.translatesAutoresizingMaskIntoConstraints = false
+        effectView.addSubview(hosting)
+        NSLayoutConstraint.activate([
+            hosting.topAnchor.constraint(equalTo: effectView.topAnchor),
+            hosting.bottomAnchor.constraint(equalTo: effectView.bottomAnchor),
+            hosting.leadingAnchor.constraint(equalTo: effectView.leadingAnchor),
+            hosting.trailingAnchor.constraint(equalTo: effectView.trailingAnchor),
+        ])
+
+        let newPanel = makePanel()
+        newPanel.contentView = effectView
+        newPanel.setContentSize(NSSize(width: 440, height: 360))
 
         position(newPanel, near: selectionRect)
+
+        // Fade in — scale is handled inside ResultPanelView via .scaleEffect onAppear.
+        newPanel.alphaValue = 0
         newPanel.orderFront(nil)
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.15
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            newPanel.animator().alphaValue = 1
+        }
+
         panel = newPanel
+        installMonitors()
+        newModel.startInitialAnalysis()
     }
 
-    // MARK: Private
+    func dismiss() {
+        removeMonitors()
+        model?.cancel()
+        model = nil
+        panel?.orderOut(nil)
+        panel = nil
+    }
+
+    // MARK: Private — panel construction
+
+    private func makePanel() -> NSPanel {
+        let p = NSPanel(
+            contentRect: .zero,
+            styleMask:   [.nonactivatingPanel, .borderless],
+            backing:     .buffered,
+            defer:       false
+        )
+        p.backgroundColor          = .clear
+        p.isOpaque                 = false
+        p.hasShadow                = true
+        p.isFloatingPanel          = true
+        p.level                    = .floating
+        p.isReleasedWhenClosed     = false
+        p.isMovableByWindowBackground = true
+        p.collectionBehavior       = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        return p
+    }
+
+    private func makeEffectView() -> NSVisualEffectView {
+        let v = NSVisualEffectView()
+        v.material      = .popover
+        v.blendingMode  = .behindWindow
+        v.state         = .active
+        v.wantsLayer    = true
+        v.layer?.cornerRadius  = 12
+        v.layer?.masksToBounds = true
+        return v
+    }
+
+    // MARK: Private — positioning
 
     private func position(_ panel: NSPanel, near rect: NSRect) {
-        let panelSize = panel.frame.size
-        let margin: CGFloat = 12
-
-        // Find which screen owns the selection.
-        let screen = NSScreen.screens.first { $0.frame.contains(rect) }
-                  ?? NSScreen.main
-                  ?? NSScreen.screens[0]
+        let size    = panel.frame.size
+        let margin  = CGFloat(12)
+        let screen  = NSScreen.screens.first { $0.frame.contains(rect) }
+                   ?? NSScreen.main ?? NSScreen.screens[0]
         let visible = screen.visibleFrame
 
-        // Try below the selection first, then above.
         var origin = NSPoint(
-            x: rect.midX - panelSize.width / 2,
-            y: rect.minY - panelSize.height - margin
+            x: rect.midX - size.width / 2,
+            y: rect.minY - size.height - margin
         )
-        if origin.y < visible.minY {
-            origin.y = rect.maxY + margin
-        }
-
-        // Clamp horizontally to the visible frame.
-        origin.x = max(visible.minX,
-                       min(origin.x, visible.maxX - panelSize.width))
-
+        if origin.y < visible.minY { origin.y = rect.maxY + margin }
+        origin.x = max(visible.minX, min(origin.x, visible.maxX - size.width))
         panel.setFrameOrigin(origin)
     }
-}
 
-// MARK: - ResultView
+    // MARK: Private — event monitors
 
-private struct ResultView: View {
-    let text: String
-    let onClose: () -> Void
-
-    @State private var copyLabel = "Copy"
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            ScrollView {
-                Text(text.isEmpty ? "No text recognised." : text)
-                    .font(.body)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
-            HStack {
-                Spacer()
-                Button(copyLabel) {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(text, forType: .string)
-                    copyLabel = "Copied!"
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                        copyLabel = "Copy"
-                    }
-                }
-                .disabled(text.isEmpty)
-                .keyboardShortcut("c", modifiers: .command)
+    private func installMonitors() {
+        // Global left-click outside the panel → dismiss.
+        globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] _ in
+            guard let self, let panel = self.panel else { return }
+            if !panel.frame.contains(NSEvent.mouseLocation) {
+                Task { @MainActor in self.dismiss() }
             }
         }
-        .padding()
-        .frame(minWidth: 340, minHeight: 220)
+        // Local Escape key → dismiss.
+        localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            if event.keyCode == 53 {   // Escape
+                Task { @MainActor in self?.dismiss() }
+                return nil
+            }
+            return event
+        }
+    }
+
+    private func removeMonitors() {
+        if let m = globalClickMonitor { NSEvent.removeMonitor(m); globalClickMonitor = nil }
+        if let m = localKeyMonitor    { NSEvent.removeMonitor(m); localKeyMonitor    = nil }
     }
 }

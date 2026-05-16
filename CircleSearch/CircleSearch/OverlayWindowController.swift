@@ -77,9 +77,9 @@ final class OverlayWindowController: NSObject {
 
         Task {
             do {
-                let image = try await ScreenCaptureManager.capture(rect: globalRect, on: screen)
-                let text  = try await OCRManager.recognizeText(in: image)
-                ResultPanelController.shared.show(text: text, near: globalRect)
+                let image   = try await ScreenCaptureManager.capture(rect: globalRect, on: screen)
+                let ocrText = try await OCRManager.recognizeText(in: image)
+                ResultPanelController.shared.show(image: image, ocrText: ocrText, near: globalRect)
             } catch {
                 NSLog("CircleSearch: capture/OCR error — %@", error.localizedDescription)
             }

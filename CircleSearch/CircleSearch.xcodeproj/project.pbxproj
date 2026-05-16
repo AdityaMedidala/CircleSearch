@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		3E29C9542FB7932F00B139D3 /* KeyboardShortcuts in Frameworks */ = {isa = PBXBuildFile; productRef = BA3F9A022FB78DCC00B139D3 /* KeyboardShortcuts */; };
+		3E29C9922FB79FA600B139D3 /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = BA3F9A042FB78DCC00B139D3 /* MarkdownUI */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -40,6 +41,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				3E29C9922FB79FA600B139D3 /* MarkdownUI in Frameworks */,
 				3E29C9542FB7932F00B139D3 /* KeyboardShortcuts in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -84,6 +86,7 @@
 			name = CircleSearch;
 			packageProductDependencies = (
 				BA3F9A022FB78DCC00B139D3 /* KeyboardShortcuts */,
+				BA3F9A042FB78DCC00B139D3 /* MarkdownUI */,
 			);
 			productName = CircleSearch;
 			productReference = 3E29C9272FB78DCC00B139D3 /* CircleSearch.app */;
@@ -115,6 +118,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				BA3F9A012FB78DCC00B139D3 /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */,
+				BA3F9A032FB78DCC00B139D3 /* XCRemoteSwiftPackageReference "swift-markdown-ui" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 3E29C9282FB78DCC00B139D3 /* Products */;
@@ -353,6 +357,14 @@
 				minimumVersion = 2.0.0;
 			};
 		};
+		BA3F9A032FB78DCC00B139D3 /* XCRemoteSwiftPackageReference "swift-markdown-ui" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/gonzalezreal/swift-markdown-ui";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.0.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -360,6 +372,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = BA3F9A012FB78DCC00B139D3 /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */;
 			productName = KeyboardShortcuts;
+		};
+		BA3F9A042FB78DCC00B139D3 /* MarkdownUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = BA3F9A032FB78DCC00B139D3 /* XCRemoteSwiftPackageReference "swift-markdown-ui" */;
+			productName = MarkdownUI;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
