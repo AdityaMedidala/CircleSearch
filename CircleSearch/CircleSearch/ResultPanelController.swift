@@ -31,8 +31,6 @@ final class ResultPanelModel {
     // MARK: Actions
 
     func startInitialAnalysis() {
-        NSLog("CircleSearch: startInitialAnalysis called, client is %@",
-              client == nil ? "nil" : "present")
         guard let client else { return }
         do {
             let b64  = try AnthropicClient.pngBase64(from: image)
@@ -128,8 +126,6 @@ final class ResultPanelController: NSObject {
         let rawKey = KeychainManager.load()
         NSLog("CircleSearch: ResultPanelController.show — KeychainManager.load() = %@",
               rawKey == nil ? "nil" : "loaded \(rawKey!.count) chars")
-        NSLog("CircleSearch: ResultPanelController.show — bundle ID = %@",
-              Bundle.main.bundleIdentifier ?? "(nil)")
 
         // Build the model for this capture session.
         let apiKey     = rawKey

@@ -33,9 +33,6 @@ struct AnthropicClient {
         AsyncThrowingStream { continuation in
             Task {
                 do {
-                    NSLog("CircleSearch: stream() called with %d messages, model: %@, key prefix: %@",
-                          messages.count, model, String(apiKey.prefix(10)))
-
                     let request = try buildRequest(messages: messages)
                     let (bytes, response) = try await URLSession.shared.bytes(for: request)
 
@@ -56,7 +53,6 @@ struct AnthropicClient {
                         let payload = String(line.dropFirst(6))
                         if let text = parseTextDelta(from: payload) {
                             continuation.yield(text)
-                            NSLog("CircleSearch: stream — yielded token")
                         }
                     }
                     continuation.finish()
