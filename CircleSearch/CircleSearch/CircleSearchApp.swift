@@ -6,7 +6,7 @@ struct CircleSearchApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
-        MenuBarExtra("CircleSearch", systemImage: "text.viewfinder") {
+        MenuBarExtra("CircleSearch", image: "MenuBarIcon") {
             ContentView()
         }
         .menuBarExtraStyle(.window)
