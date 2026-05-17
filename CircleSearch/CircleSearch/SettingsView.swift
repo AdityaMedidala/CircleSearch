@@ -11,6 +11,8 @@ struct SettingsView: View {
                 .tabItem { Label("Anthropic", systemImage: "key") }
             OpenAITestTab()
                 .tabItem { Label("OpenAI", systemImage: "sparkles") }
+            GoogleTestTab()
+                .tabItem { Label("Google", systemImage: "globe") }
             AboutTab()
                 .tabItem { Label("About", systemImage: "info.circle") }
         }
@@ -236,6 +238,105 @@ private struct OpenAITestTab: View {
                 status = "Cleared."
             } else {
                 try KeychainManager.save(trimmed, for: .openai)
+                status = "Saved."
+            }
+        } catch {
+            status = error.localizedDescription
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { status = "" }
+    }
+
+    private func clearKey() {
+        apiKey = ""
+        saveKey()
+    }
+}
+
+// MARK: - Google (Phase 3 temporary tab — replaced by Providers tab in Phase 4)
+
+private struct GoogleTestTab: View {
+
+    @AppStorage("defaultProvider") private var defaultProvider = "anthropic"
+    @AppStorage("selectedModel_google") private var selectedModel = GoogleProvider.defaultModel
+
+    @State private var apiKey = ""
+    @State private var status = ""
+
+    private var isDefault: Bool { defaultProvider == ProviderType.google.rawValue }
+
+    var body: some View {
+        Form {
+            Section("Google AI API Key") {
+                SecureField("AIza…", text: $apiKey)
+                HStack {
+                    Button("Save")  { saveKey() }
+                    Button("Clear") { clearKey() }
+                    Spacer()
+                    if !status.isEmpty {
+                        Text(status)
+                            .foregroundStyle(.secondary)
+                            .font(.caption)
+                    }
+                }
+                Link("Get an API key →", destination: GoogleProvider.consoleURL)
+                    .font(.caption)
+            }
+
+            Section("Model") {
+                Picker("Model", selection: $selectedModel) {
+                    ForEach(GoogleProvider.models, id: \.id) { m in
+                        Text(m.label).tag(m.id)
+                    }
+                }
+                .pickerStyle(.menu)
+            }
+
+            Section("Active Provider") {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Default provider")
+                        Text(isDefault ? "Currently: Google Gemini" : "Currently: \(defaultProvider)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if isDefault {
+                        Label("Active", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                            .font(.callout)
+                    } else {
+                        Button("Set as default") {
+                            defaultProvider = ProviderType.google.rawValue
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                    }
+                }
+                if !isDefault {
+                    Button("Restore Anthropic as default") {
+                        defaultProvider = ProviderType.anthropic.rawValue
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .padding()
+        .onAppear {
+            apiKey = KeychainManager.load(for: .google) ?? ""
+        }
+    }
+
+    private func saveKey() {
+        let trimmed = apiKey.trimmingCharacters(in: .whitespaces)
+        do {
+            if trimmed.isEmpty {
+                try KeychainManager.delete(for: .google)
+                status = "Cleared."
+            } else {
+                try KeychainManager.save(trimmed, for: .google)
                 status = "Saved."
             }
         } catch {

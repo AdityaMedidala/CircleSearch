@@ -203,7 +203,7 @@ final class ResultPanelController: NSObject {
         switch type {
         case .anthropic: return AnthropicProvider(apiKey: apiKey, model: model)
         case .openai:    return OpenAIProvider(apiKey: apiKey, model: model)
-        case .google:    return nil   // Phase 3
+        case .google:    return GoogleProvider(apiKey: apiKey, model: model)
         }
     }
 

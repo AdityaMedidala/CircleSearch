@@ -143,13 +143,16 @@ enum ImageEncodingError: LocalizedError {
 enum ProviderError: LocalizedError {
     case invalidURL
     case httpError(Int)
+    case apiError(String)   // provider returned a decoded error message
 
     var errorDescription: String? {
         switch self {
         case .invalidURL:       return "Invalid API URL."
         case .httpError(401):   return "Invalid API key. Update it in Settings."
+        case .httpError(403):   return "Invalid API key or access denied. Update it in Settings."
         case .httpError(429):   return "Rate limit reached. Wait a moment and try again."
         case .httpError(let c): return "API error (HTTP \(c)). Check Settings."
+        case .apiError(let m):  return m
         }
     }
 }
