@@ -8,11 +8,13 @@ struct SettingsView: View {
             GeneralTab()
                 .tabItem { Label("General", systemImage: "gear") }
             APITab()
-                .tabItem { Label("API", systemImage: "key") }
+                .tabItem { Label("Anthropic", systemImage: "key") }
+            OpenAITestTab()
+                .tabItem { Label("OpenAI", systemImage: "sparkles") }
             AboutTab()
                 .tabItem { Label("About", systemImage: "info.circle") }
         }
-        .frame(width: 480, height: 400)
+        .frame(width: 480, height: 420)
     }
 }
 
@@ -60,9 +62,12 @@ private struct APITab: View {
         ("claude-opus-4-7",           "claude-opus-4-7 (most capable, slower)"),
     ]
 
-    @AppStorage("selectedModel") private var selectedModel = AnthropicClient.defaultModel
+    @AppStorage("defaultProvider") private var defaultProvider = "anthropic"
+    @AppStorage("selectedModel") private var selectedModel = AnthropicProvider.defaultModel
     @State private var apiKey   = ""
     @State private var status   = ""
+
+    private var isDefault: Bool { defaultProvider == ProviderType.anthropic.rawValue }
 
     var body: some View {
         Form {
@@ -90,6 +95,29 @@ private struct APITab: View {
                 }
                 .pickerStyle(.menu)
             }
+
+            Section("Active Provider") {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Default provider")
+                        Text(isDefault ? "Currently: Anthropic" : "Currently: \(defaultProvider)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if isDefault {
+                        Label("Active", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                            .font(.callout)
+                    } else {
+                        Button("Restore as default") {
+                            defaultProvider = ProviderType.anthropic.rawValue
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                    }
+                }
+            }
         }
         .formStyle(.grouped)
         .padding()
@@ -109,6 +137,105 @@ private struct APITab: View {
                 status = "Cleared."
             } else {
                 try KeychainManager.save(trimmed)
+                status = "Saved."
+            }
+        } catch {
+            status = error.localizedDescription
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { status = "" }
+    }
+
+    private func clearKey() {
+        apiKey = ""
+        saveKey()
+    }
+}
+
+// MARK: - OpenAI (Phase 2 temporary tab — replaced by Providers tab in Phase 4)
+
+private struct OpenAITestTab: View {
+
+    @AppStorage("defaultProvider") private var defaultProvider = "anthropic"
+    @AppStorage("selectedModel_openai") private var selectedModel = OpenAIProvider.defaultModel
+
+    @State private var apiKey = ""
+    @State private var status = ""
+
+    private var isDefault: Bool { defaultProvider == ProviderType.openai.rawValue }
+
+    var body: some View {
+        Form {
+            Section("OpenAI API Key") {
+                SecureField("sk-…", text: $apiKey)
+                HStack {
+                    Button("Save")  { saveKey() }
+                    Button("Clear") { clearKey() }
+                    Spacer()
+                    if !status.isEmpty {
+                        Text(status)
+                            .foregroundStyle(.secondary)
+                            .font(.caption)
+                    }
+                }
+                Link("Get an API key →", destination: OpenAIProvider.consoleURL)
+                    .font(.caption)
+            }
+
+            Section("Model") {
+                Picker("Model", selection: $selectedModel) {
+                    ForEach(OpenAIProvider.models, id: \.id) { m in
+                        Text(m.label).tag(m.id)
+                    }
+                }
+                .pickerStyle(.menu)
+            }
+
+            Section("Active Provider") {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Default provider")
+                        Text(isDefault ? "Currently: OpenAI" : "Currently: \(defaultProvider)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if isDefault {
+                        Label("Active", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                            .font(.callout)
+                    } else {
+                        Button("Set as default") {
+                            defaultProvider = ProviderType.openai.rawValue
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                    }
+                }
+                if !isDefault {
+                    Button("Restore Anthropic as default") {
+                        defaultProvider = ProviderType.anthropic.rawValue
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .padding()
+        .onAppear {
+            apiKey = KeychainManager.load(for: .openai) ?? ""
+        }
+    }
+
+    private func saveKey() {
+        let trimmed = apiKey.trimmingCharacters(in: .whitespaces)
+        do {
+            if trimmed.isEmpty {
+                try KeychainManager.delete(for: .openai)
+                status = "Cleared."
+            } else {
+                try KeychainManager.save(trimmed, for: .openai)
                 status = "Saved."
             }
         } catch {

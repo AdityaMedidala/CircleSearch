@@ -20,55 +20,44 @@ private final class ResultPanel: NSPanel {
 final class ResultPanelModel {
 
     // Panel content
-    let ocrText: String
-    let image: CGImage
-    let client: AnthropicClient?
+    let ocrText:  String
+    let image:    CGImage
+    let provider: (any AIProvider)?
 
     // AI streaming state — observed by ResultPanelView
     var aiResponse  = ""
     var isStreaming  = false
     var streamError: String?
-    private(set) var conversationHistory: [APIMessage] = []
+
+    // Follow-up conversation history (assistant + user turns after initial analysis).
+    // Does NOT include the initial image turn; that is always reconstructed from `image`/`ocrText`.
+    private var chatHistory: [ChatTurn] = []
 
     private var streamTask: Task<Void, Never>?
 
-    init(ocrText: String, image: CGImage, client: AnthropicClient?) {
-        self.ocrText = ocrText
-        self.image   = image
-        self.client  = client
+    init(ocrText: String, image: CGImage, provider: (any AIProvider)?) {
+        self.ocrText   = ocrText
+        self.image     = image
+        self.provider  = provider
     }
 
     // MARK: Actions
 
     func startInitialAnalysis() {
-        guard let client else { return }
-        do {
-            let b64  = try AnthropicClient.pngBase64(from: image)
-            let msgs = [APIMessage(
-                role: "user",
-                content: .blocks([
-                    ContentBlock.image(mediaType: "image/png", base64Data: b64),
-                    ContentBlock.text("Analyze this screen capture."),
-                ])
-            )]
-            conversationHistory = msgs
-            runStream(messages: msgs, client: client)
-        } catch {
-            streamError = error.localizedDescription
-        }
+        guard provider != nil else { return }
+        chatHistory = []
+        runStream()
     }
 
     func submitFollowUp(text: String) {
-        guard let client else { return }
-        // Append assistant turn, then new user message.
+        guard provider != nil else { return }
+        // Append the previous assistant turn before adding the new user message.
         if !aiResponse.isEmpty {
-            conversationHistory.append(
-                APIMessage(role: "assistant", content: .text(aiResponse))
-            )
+            chatHistory.append(ChatTurn(role: .assistant, content: aiResponse, image: nil))
         }
-        conversationHistory.append(APIMessage(role: "user", content: .text(text)))
+        chatHistory.append(ChatTurn(role: .user, content: text, image: nil))
         aiResponse = ""
-        runStream(messages: conversationHistory, client: client)
+        runStream()
     }
 
     func cancel() {
@@ -78,10 +67,14 @@ final class ResultPanelModel {
 
     // MARK: Private
 
-    private func runStream(messages: [APIMessage], client: AnthropicClient) {
+    private func runStream() {
+        guard let provider else { return }
         streamTask?.cancel()
         isStreaming = true
         streamError = nil
+
+        // Capture history snapshot so the task closure is isolated.
+        let historyCopy = chatHistory
 
         streamTask = Task {
             defer { isStreaming = false }
@@ -90,9 +83,9 @@ final class ResultPanelModel {
                 var tokenCount = 0
                 var lastFlush  = Date()
 
-                for try await token in client.stream(messages: messages) {
+                for try await token in provider.stream(image: image, ocrText: ocrText, history: historyCopy) {
                     guard !Task.isCancelled else { break }
-                    buffer += token
+                    buffer     += token
                     tokenCount += 1
                     let now = Date()
                     // Flush every 5 tokens or 50 ms, whichever comes first.
@@ -125,25 +118,35 @@ final class ResultPanelController: NSObject {
     private var panel: NSPanel?
     private var model: ResultPanelModel?
     private var globalClickMonitor: Any?
-    private var localKeyMonitor: Any?
+    private var localKeyMonitor:    Any?
 
     // MARK: Public
 
     func show(image: CGImage, ocrText: String, near selectionRect: NSRect) {
         dismiss()
 
-        // Diagnostic: surface Keychain load result and service identity.
-        let rawKey = KeychainManager.load()
-        NSLog("CircleSearch: ResultPanelController.show — KeychainManager.load() = %@",
-              rawKey == nil ? "nil" : "loaded \(rawKey!.count) chars")
+        // Resolve the default provider from AppStorage, falling back to Anthropic.
+        let defaultType = ProviderType(
+            rawValue: UserDefaults.standard.string(forKey: "defaultProvider") ?? "anthropic"
+        ) ?? .anthropic
 
-        // Build the model for this capture session.
-        let apiKey     = rawKey
-        let modelID    = UserDefaults.standard.string(forKey: "selectedModel")
-                      ?? AnthropicClient.defaultModel
-        let client     = apiKey.map { AnthropicClient(apiKey: $0, model: modelID) }
-        let newModel   = ResultPanelModel(ocrText: ocrText, image: image, client: client)
-        model          = newModel
+        let apiKey = KeychainManager.load(for: defaultType)
+        NSLog("CircleSearch: ResultPanelController.show — provider=%@ key=%@",
+              defaultType.rawValue,
+              apiKey == nil ? "nil" : "loaded \(apiKey!.count) chars")
+
+        // Per-provider model key, with a fallback to the legacy "selectedModel" key for Anthropic.
+        let perProviderKey = "selectedModel_\(defaultType.rawValue)"
+        let modelID = UserDefaults.standard.string(forKey: perProviderKey)
+            ?? (defaultType == .anthropic ? UserDefaults.standard.string(forKey: "selectedModel") : nil)
+            ?? defaultType.defaultModel
+
+        let provider: (any AIProvider)? = apiKey.flatMap { key in
+            makeProvider(type: defaultType, apiKey: key, model: modelID)
+        }
+
+        let newModel = ResultPanelModel(ocrText: ocrText, image: image, provider: provider)
+        model = newModel
 
         // Build the visual hierarchy.
         let panelView = ResultPanelView(
@@ -176,8 +179,8 @@ final class ResultPanelController: NSObject {
         newPanel.alphaValue = 0
         newPanel.orderFront(nil)
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.15
-            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            ctx.duration        = 0.15
+            ctx.timingFunction  = CAMediaTimingFunction(name: .easeOut)
             newPanel.animator().alphaValue = 1
         }
 
@@ -192,6 +195,16 @@ final class ResultPanelController: NSObject {
         model = nil
         panel?.orderOut(nil)
         panel = nil
+    }
+
+    // MARK: Private — provider factory
+
+    private func makeProvider(type: ProviderType, apiKey: String, model: String) -> (any AIProvider)? {
+        switch type {
+        case .anthropic: return AnthropicProvider(apiKey: apiKey, model: model)
+        case .openai:    return OpenAIProvider(apiKey: apiKey, model: model)
+        case .google:    return nil   // Phase 3
+        }
     }
 
     // MARK: Private — panel construction
@@ -248,8 +261,6 @@ final class ResultPanelController: NSObject {
 
     private func installMonitors() {
         // Global left-click outside any visible app window → dismiss.
-        // Checking all app windows (result panel, Settings, etc.) prevents the
-        // monitor from dismissing the panel when the user clicks within our own UI.
         globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] _ in
             guard let self else { return }
             let loc = NSEvent.mouseLocation
@@ -260,7 +271,7 @@ final class ResultPanelController: NSObject {
         }
         // Local key monitor: Escape → dismiss; Cmd+C → copy AI response if non-empty.
         localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            if event.keyCode == 53 {   // Escape (keyCode is correct for non-character keys)
+            if event.keyCode == 53 {
                 Task { @MainActor in self?.dismiss() }
                 return nil
             }

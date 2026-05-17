@@ -83,7 +83,7 @@ struct ResultPanelView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 Group {
-                    if model.client == nil {
+                    if model.provider == nil {
                         noKeyPlaceholder
                     } else if let err = model.streamError {
                         errorView(err)
@@ -119,7 +119,7 @@ struct ResultPanelView: View {
             Image(systemName: "key.slash")
                 .font(.title2)
                 .foregroundStyle(.secondary)
-            Text("Connect to Claude for AI analysis.")
+            Text("Add an API key in Settings to enable AI analysis.")
                 .foregroundStyle(.secondary)
                 .font(.callout)
             Button("Open Settings") {
@@ -203,10 +203,10 @@ struct ResultPanelView: View {
                 .textFieldStyle(.roundedBorder)
                 .focused($followUpFocused)
                 .onSubmit { submitFollowUp() }
-                .disabled(model.client == nil || model.isStreaming)
+                .disabled(model.provider == nil || model.isStreaming)
             Button("Send") { submitFollowUp() }
                 .disabled(followUpText.trimmingCharacters(in: .whitespaces).isEmpty
-                          || model.client == nil || model.isStreaming)
+                          || model.provider == nil || model.isStreaming)
         }
         .padding(.horizontal, 12)
         .padding(.bottom, 10)
