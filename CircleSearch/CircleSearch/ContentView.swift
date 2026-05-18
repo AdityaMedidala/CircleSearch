@@ -2,6 +2,9 @@ import SwiftUI
 import KeyboardShortcuts
 
 struct ContentView: View {
+
+    @State private var history: [CaptureEntry] = []
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .center) {
@@ -23,12 +26,110 @@ struct ContentView: View {
 
             Divider()
 
+            // Recent captures
+            Text("Recent Captures")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.secondary)
+
+            if history.isEmpty {
+                Text("No captures yet.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 4)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(history) { entry in
+                        Button {
+                            openCapture(entry)
+                        } label: {
+                            CaptureHistoryRow(entry: entry)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
+            Divider()
+
             Button("Quit CircleSearch") {
                 NSApp.terminate(nil)
             }
             .keyboardShortcut("q")
         }
         .padding()
-        .frame(width: 260)
+        .frame(width: 280)
+        .onAppear { loadHistory() }
+        .onReceive(NotificationCenter.default.publisher(for: .captureHistorySaved)) { _ in
+            loadHistory()
+        }
+    }
+
+    private func loadHistory() {
+        Task.detached(priority: .userInitiated) {
+            let entries = HistoryManager.loadRecent(limit: 10)
+            await MainActor.run { history = entries }
+        }
+    }
+
+    private func openCapture(_ entry: CaptureEntry) {
+        Task { @MainActor in
+            ResultPanelController.shared.showFromHistory(entry: entry)
+        }
+    }
+}
+
+// MARK: - CaptureHistoryRow
+
+private struct CaptureHistoryRow: View {
+    let entry: CaptureEntry
+
+    var body: some View {
+        HStack(spacing: 8) {
+            thumbnailView
+            VStack(alignment: .leading, spacing: 2) {
+                Text(ocrSnippet)
+                    .font(.callout)
+                    .lineLimit(1)
+                    .foregroundStyle(.primary)
+                Text(relativeTime)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(.vertical, 5)
+        .contentShape(Rectangle())
+    }
+
+    private var thumbnailView: some View {
+        Group {
+            if let cg = entry.thumbnail {
+                Image(decorative: cg, scale: 1)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else {
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(.secondary.opacity(0.2))
+            }
+        }
+        .frame(width: 32, height: 32)
+        .clipShape(RoundedRectangle(cornerRadius: 4))
+    }
+
+    private var ocrSnippet: String {
+        let text = entry.ocrText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.isEmpty { return "[No text detected]" }
+        if text.count <= 40 { return text }
+        return String(text.prefix(40)) + "…"
+    }
+
+    private var relativeTime: String {
+        let secs = Date().timeIntervalSince(entry.timestamp)
+        if secs < 60      { return "just now" }
+        if secs < 3600    { return "\(Int(secs / 60)) min ago" }
+        if secs < 7200    { return "1 hour ago" }
+        if secs < 86400   { return "\(Int(secs / 3600)) hours ago" }
+        if secs < 172800  { return "yesterday" }
+        return "\(Int(secs / 86400)) days ago"
     }
 }

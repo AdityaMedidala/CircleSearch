@@ -22,5 +22,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         KeyboardShortcuts.onKeyUp(for: .triggerCapture) {
             OverlayWindowController.shared.showOverlay()
         }
+
+        // Prune capture history in the background on every launch.
+        Task.detached(priority: .background) {
+            HistoryManager.prune()
+        }
     }
 }

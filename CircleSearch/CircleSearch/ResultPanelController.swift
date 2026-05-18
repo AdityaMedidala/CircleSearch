@@ -36,6 +36,10 @@ final class ResultPanelModel {
     var isStreaming  = false
     var streamError: String?
 
+    /// True when the model is displaying a historical capture rather than a live session.
+    /// In this state streaming is disabled and follow-up is hidden.
+    let isReadOnly: Bool
+
     // Follow-up conversation history (assistant + user turns after initial analysis).
     // Does NOT include the initial image turn; always reconstructed from image/ocrText.
     private var chatHistory: [ChatTurn] = []
@@ -47,6 +51,17 @@ final class ResultPanelModel {
         self.image                  = image
         self.currentProvider        = provider
         self.availableProviderTypes = availableProviderTypes
+        self.isReadOnly             = false
+    }
+
+    /// Initialises a read-only model for replaying a historical capture.
+    init(ocrText: String, image: CGImage, aiResponse: String) {
+        self.ocrText                = ocrText
+        self.image                  = image
+        self.currentProvider        = nil
+        self.availableProviderTypes = []
+        self.aiResponse             = aiResponse
+        self.isReadOnly             = true
     }
 
     // MARK: Actions
@@ -125,6 +140,21 @@ final class ResultPanelModel {
                     }
                 }
                 if !buffer.isEmpty { aiResponse += buffer }
+
+                // Persist the initial analysis to history after a clean stream completion.
+                // Skip follow-up turns (historyCopy non-empty) and cancelled/errored runs.
+                if !Task.isCancelled && historyCopy.isEmpty {
+                    let img  = image
+                    let ocr  = ocrText
+                    let ai   = aiResponse
+                    let kind = provider.providerKind
+                    let mdl  = provider.model
+                    Task.detached(priority: .background) {
+                        try? HistoryManager.save(image: img, ocrText: ocr,
+                                                 aiResponse: ai, providerType: kind, model: mdl)
+                        HistoryManager.prune()
+                    }
+                }
             } catch is CancellationError {
                 // Silently cancelled — e.g. provider switch, new capture, or panel dismissed.
             } catch {
@@ -226,6 +256,61 @@ final class ResultPanelController: NSObject {
         newModel.startInitialAnalysis()
     }
 
+    /// Reopens a historical capture in read-only mode (no streaming, no follow-up).
+    func showFromHistory(entry: CaptureEntry) {
+        // Load the full-resolution image first (synchronous, local file, typically < 100 ms).
+        guard let cgImage = entry.image else {
+            NSLog("CircleSearch: showFromHistory — could not load image for %@",
+                  entry.id.uuidString)
+            return
+        }
+        dismiss()
+
+        let historyModel = ResultPanelModel(
+            ocrText:    entry.ocrText,
+            image:      cgImage,
+            aiResponse: entry.aiResponse
+        )
+        model = historyModel
+
+        let panelView = ResultPanelView(
+            model:        historyModel,
+            onDismiss:    { [weak self] in self?.dismiss() },
+            onNewCapture: { [weak self] in
+                self?.dismiss()
+                OverlayWindowController.shared.showOverlay()
+            }
+        )
+
+        let effectView = makeEffectView()
+        let hosting    = NSHostingView(rootView: panelView)
+        hosting.translatesAutoresizingMaskIntoConstraints = false
+        effectView.addSubview(hosting)
+        NSLayoutConstraint.activate([
+            hosting.topAnchor.constraint(equalTo: effectView.topAnchor),
+            hosting.bottomAnchor.constraint(equalTo: effectView.bottomAnchor),
+            hosting.leadingAnchor.constraint(equalTo: effectView.leadingAnchor),
+            hosting.trailingAnchor.constraint(equalTo: effectView.trailingAnchor),
+        ])
+
+        let newPanel = makePanel()
+        newPanel.contentView = effectView
+        newPanel.setContentSize(NSSize(width: 440, height: 400))
+        positionAtScreenCenter(newPanel)
+
+        newPanel.alphaValue = 0
+        newPanel.orderFront(nil)
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration       = 0.15
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            newPanel.animator().alphaValue = 1
+        }
+
+        panel = newPanel
+        installMonitors()
+        // No startInitialAnalysis() — read-only model is pre-populated.
+    }
+
     func dismiss() {
         removeMonitors()
         model?.cancel()
@@ -282,6 +367,16 @@ final class ResultPanelController: NSObject {
         if origin.y < visible.minY { origin.y = rect.maxY + margin }
         origin.x = max(visible.minX, min(origin.x, visible.maxX - size.width))
         panel.setFrameOrigin(origin)
+    }
+
+    private func positionAtScreenCenter(_ panel: NSPanel) {
+        let size   = panel.frame.size
+        let screen = NSScreen.main ?? NSScreen.screens[0]
+        let vis    = screen.visibleFrame
+        panel.setFrameOrigin(NSPoint(
+            x: vis.midX - size.width  / 2,
+            y: vis.midY - size.height / 2 + 50
+        ))
     }
 
     // MARK: Private — event monitors

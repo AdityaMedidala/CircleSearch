@@ -23,8 +23,9 @@ struct ResultPanelView: View {
         self.model        = model
         self.onDismiss    = onDismiss
         self.onNewCapture = onNewCapture
-        // Collapse OCR by default during onboarding so the provider cards have more room.
-        let inOnboarding = model.availableProviderTypes.isEmpty
+        // Collapse OCR during onboarding only (provider cards need room).
+        // Read-only history views use the normal expand-if-short logic.
+        let inOnboarding = model.availableProviderTypes.isEmpty && !model.isReadOnly
         _isOCRExpanded = State(initialValue: inOnboarding ? false : model.ocrText.count <= 200)
     }
 
@@ -32,23 +33,32 @@ struct ResultPanelView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if model.availableProviderTypes.isEmpty {
+            if model.availableProviderTypes.isEmpty && !model.isReadOnly {
+                // Onboarding — no API keys configured yet.
                 ocrSection
                 Divider().opacity(0.4)
                 onboardingView
                 onboardingButtonRow
             } else {
-                // Provider chip — only visible when the user has ≥ 2 providers configured.
-                if model.availableProviderTypes.count > 1 {
+                // Normal capture or read-only history replay.
+                if !model.isReadOnly && model.availableProviderTypes.count > 1 {
                     providerPickerStrip
                     Divider().opacity(0.3)
                 }
                 ocrSection
                 Divider().opacity(0.4)
+                if model.isReadOnly {
+                    readOnlyBadge
+                    Divider().opacity(0.3)
+                }
                 aiSection
                 Divider().opacity(0.4)
                 buttonRow
-                followUpSection
+                if model.isReadOnly {
+                    readOnlyFollowUpPlaceholder
+                } else {
+                    followUpSection
+                }
             }
         }
         .frame(width: 440)
@@ -191,7 +201,7 @@ struct ResultPanelView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 Group {
-                    if model.currentProvider == nil {
+                    if !model.isReadOnly && model.currentProvider == nil {
                         noKeyPlaceholder
                     } else if let err = model.streamError {
                         errorView(err)
@@ -250,6 +260,30 @@ struct ResultPanelView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
+    }
+
+    // MARK: Read-only indicators
+
+    private var readOnlyBadge: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "clock.arrow.circlepath")
+                .font(.caption2)
+            Text("Viewing past capture")
+                .font(.caption)
+        }
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 6)
+    }
+
+    private var readOnlyFollowUpPlaceholder: some View {
+        Text("Read-only — capture again to ask follow-ups.")
+            .font(.caption)
+            .foregroundStyle(.tertiary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 14)
+            .padding(.bottom, 10)
     }
 
     // MARK: Button row
