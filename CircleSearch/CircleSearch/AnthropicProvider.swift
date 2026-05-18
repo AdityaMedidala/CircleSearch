@@ -20,6 +20,7 @@ struct AnthropicProvider: AIProvider {
 
     // MARK: Instance
 
+    let providerKind: ProviderType = .anthropic
     let apiKey: String
     let model: String
 

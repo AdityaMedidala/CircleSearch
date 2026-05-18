@@ -20,6 +20,7 @@ struct OpenAIProvider: AIProvider {
 
     // MARK: Instance
 
+    let providerKind: ProviderType = .openai
     let apiKey: String
     let model: String
 

@@ -19,6 +19,7 @@ struct GoogleProvider: AIProvider {
 
     // MARK: Instance
 
+    let providerKind: ProviderType = .google
     let apiKey: String
     let model: String
 

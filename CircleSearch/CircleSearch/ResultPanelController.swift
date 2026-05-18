@@ -19,10 +19,17 @@ private final class ResultPanel: NSPanel {
 @MainActor
 final class ResultPanelModel {
 
-    // Panel content
-    let ocrText:  String
-    let image:    CGImage
-    let provider: (any AIProvider)?
+    // Panel content — fixed for the lifetime of this capture session.
+    let ocrText: String
+    let image:   CGImage
+
+    /// All provider types that had a saved API key when this capture was taken.
+    /// Used by the picker to enumerate what the user can switch to.
+    /// Grows when the user activates a provider via the in-panel onboarding cards.
+    private(set) var availableProviderTypes: [ProviderType]
+
+    /// The provider currently generating responses. Changes when the user switches providers.
+    private(set) var currentProvider: (any AIProvider)?
 
     // AI streaming state — observed by ResultPanelView
     var aiResponse  = ""
@@ -30,34 +37,57 @@ final class ResultPanelModel {
     var streamError: String?
 
     // Follow-up conversation history (assistant + user turns after initial analysis).
-    // Does NOT include the initial image turn; that is always reconstructed from `image`/`ocrText`.
+    // Does NOT include the initial image turn; always reconstructed from image/ocrText.
     private var chatHistory: [ChatTurn] = []
-
     private var streamTask: Task<Void, Never>?
 
-    init(ocrText: String, image: CGImage, provider: (any AIProvider)?) {
-        self.ocrText   = ocrText
-        self.image     = image
-        self.provider  = provider
+    init(ocrText: String, image: CGImage,
+         provider: (any AIProvider)?, availableProviderTypes: [ProviderType]) {
+        self.ocrText                = ocrText
+        self.image                  = image
+        self.currentProvider        = provider
+        self.availableProviderTypes = availableProviderTypes
     }
 
     // MARK: Actions
 
     func startInitialAnalysis() {
-        guard provider != nil else { return }
+        guard currentProvider != nil else { return }
         chatHistory = []
         runStream()
     }
 
     func submitFollowUp(text: String) {
-        guard provider != nil else { return }
-        // Append the previous assistant turn before adding the new user message.
+        guard currentProvider != nil else { return }
         if !aiResponse.isEmpty {
             chatHistory.append(ChatTurn(role: .assistant, content: aiResponse, image: nil))
         }
         chatHistory.append(ChatTurn(role: .user, content: text, image: nil))
         aiResponse = ""
         runStream()
+    }
+
+    /// Switches to a different provider mid-session.
+    /// Cancels any active stream, clears history + response, and re-runs the initial analysis
+    /// so the user immediately sees the new provider's take on the same captured image.
+    func switchProvider(to providerType: ProviderType) {
+        // No-op if already using this provider.
+        guard currentProvider?.providerKind != providerType else { return }
+
+        guard let apiKey = KeychainManager.load(for: providerType) else { return }
+        let modelKey = "selectedModel_\(providerType.rawValue)"
+        let modelID  = UserDefaults.standard.string(forKey: modelKey) ?? providerType.defaultModel
+
+        streamTask?.cancel()
+        streamTask      = nil
+        chatHistory     = []
+        aiResponse      = ""
+        streamError     = nil
+        currentProvider = makeProvider(providerType, apiKey: apiKey, model: modelID)
+        if !availableProviderTypes.contains(providerType) {
+            availableProviderTypes.append(providerType)
+        }
+        startInitialAnalysis()
     }
 
     func cancel() {
@@ -68,12 +98,11 @@ final class ResultPanelModel {
     // MARK: Private
 
     private func runStream() {
-        guard let provider else { return }
+        guard let provider = currentProvider else { return }
         streamTask?.cancel()
         isStreaming = true
         streamError = nil
 
-        // Capture history snapshot so the task closure is isolated.
         let historyCopy = chatHistory
 
         streamTask = Task {
@@ -88,7 +117,6 @@ final class ResultPanelModel {
                     buffer     += token
                     tokenCount += 1
                     let now = Date()
-                    // Flush every 5 tokens or 50 ms, whichever comes first.
                     if tokenCount >= 5 || now.timeIntervalSince(lastFlush) >= 0.05 {
                         aiResponse += buffer
                         buffer      = ""
@@ -98,7 +126,7 @@ final class ResultPanelModel {
                 }
                 if !buffer.isEmpty { aiResponse += buffer }
             } catch is CancellationError {
-                // Silently cancelled — e.g. new capture or panel dismissed.
+                // Silently cancelled — e.g. provider switch, new capture, or panel dismissed.
             } catch {
                 streamError = error.localizedDescription
             }
@@ -117,13 +145,17 @@ final class ResultPanelController: NSObject {
 
     private var panel: NSPanel?
     private var model: ResultPanelModel?
-    private var globalClickMonitor: Any?
-    private var localKeyMonitor:    Any?
+    private var localKeyMonitor: Any?
 
     // MARK: Public
 
     func show(image: CGImage, ocrText: String, near selectionRect: NSRect) {
         dismiss()
+
+        // All provider types that currently have a saved key — used for the picker.
+        let availableTypes = ProviderType.allCases.filter {
+            KeychainManager.load(for: $0) != nil
+        }
 
         // Resolve the default provider from AppStorage, falling back to Anthropic.
         let defaultType = ProviderType(
@@ -131,21 +163,27 @@ final class ResultPanelController: NSObject {
         ) ?? .anthropic
 
         let apiKey = KeychainManager.load(for: defaultType)
-        NSLog("CircleSearch: ResultPanelController.show — provider=%@ key=%@",
+        NSLog("CircleSearch: ResultPanelController.show — provider=%@ key=%@ available=%@",
               defaultType.rawValue,
-              apiKey == nil ? "nil" : "loaded \(apiKey!.count) chars")
+              apiKey == nil ? "nil" : "loaded \(apiKey!.count) chars",
+              availableTypes.map(\.rawValue).joined(separator: ","))
 
-        // Per-provider model key, with a fallback to the legacy "selectedModel" key for Anthropic.
         let perProviderKey = "selectedModel_\(defaultType.rawValue)"
         let modelID = UserDefaults.standard.string(forKey: perProviderKey)
-            ?? (defaultType == .anthropic ? UserDefaults.standard.string(forKey: "selectedModel") : nil)
+            ?? (defaultType == .anthropic
+                    ? UserDefaults.standard.string(forKey: "selectedModel") : nil)
             ?? defaultType.defaultModel
 
-        let provider: (any AIProvider)? = apiKey.flatMap { key in
-            makeProvider(type: defaultType, apiKey: key, model: modelID)
+        let activeProvider: (any AIProvider)? = apiKey.map {
+            makeProvider(defaultType, apiKey: $0, model: modelID)
         }
 
-        let newModel = ResultPanelModel(ocrText: ocrText, image: image, provider: provider)
+        let newModel = ResultPanelModel(
+            ocrText:                ocrText,
+            image:                  image,
+            provider:               activeProvider,
+            availableProviderTypes: availableTypes
+        )
         model = newModel
 
         // Build the visual hierarchy.
@@ -175,12 +213,11 @@ final class ResultPanelController: NSObject {
 
         position(newPanel, near: selectionRect)
 
-        // Fade in — scale is handled inside ResultPanelView via .scaleEffect onAppear.
         newPanel.alphaValue = 0
         newPanel.orderFront(nil)
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration        = 0.15
-            ctx.timingFunction  = CAMediaTimingFunction(name: .easeOut)
+            ctx.duration       = 0.15
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
             newPanel.animator().alphaValue = 1
         }
 
@@ -195,16 +232,6 @@ final class ResultPanelController: NSObject {
         model = nil
         panel?.orderOut(nil)
         panel = nil
-    }
-
-    // MARK: Private — provider factory
-
-    private func makeProvider(type: ProviderType, apiKey: String, model: String) -> (any AIProvider)? {
-        switch type {
-        case .anthropic: return AnthropicProvider(apiKey: apiKey, model: model)
-        case .openai:    return OpenAIProvider(apiKey: apiKey, model: model)
-        case .google:    return GoogleProvider(apiKey: apiKey, model: model)
-        }
     }
 
     // MARK: Private — panel construction
@@ -260,15 +287,6 @@ final class ResultPanelController: NSObject {
     // MARK: Private — event monitors
 
     private func installMonitors() {
-        // Global left-click outside any visible app window → dismiss.
-        globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] _ in
-            guard let self else { return }
-            let loc = NSEvent.mouseLocation
-            let insideApp = NSApp.windows.contains { $0.isVisible && $0.frame.contains(loc) }
-            if !insideApp {
-                Task { @MainActor in self.dismiss() }
-            }
-        }
         // Local key monitor: Escape → dismiss; Cmd+C → copy AI response if non-empty.
         localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             if event.keyCode == 53 {
@@ -290,8 +308,7 @@ final class ResultPanelController: NSObject {
     }
 
     private func removeMonitors() {
-        if let m = globalClickMonitor { NSEvent.removeMonitor(m); globalClickMonitor = nil }
-        if let m = localKeyMonitor    { NSEvent.removeMonitor(m); localKeyMonitor    = nil }
+        if let m = localKeyMonitor { NSEvent.removeMonitor(m); localKeyMonitor = nil }
     }
 }
 

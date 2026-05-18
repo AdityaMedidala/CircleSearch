@@ -2,21 +2,19 @@ import SwiftUI
 import KeyboardShortcuts
 import ServiceManagement
 
+// MARK: - SettingsView
+
 struct SettingsView: View {
     var body: some View {
         TabView {
             GeneralTab()
                 .tabItem { Label("General", systemImage: "gear") }
-            APITab()
-                .tabItem { Label("Anthropic", systemImage: "key") }
-            OpenAITestTab()
-                .tabItem { Label("OpenAI", systemImage: "sparkles") }
-            GoogleTestTab()
-                .tabItem { Label("Google", systemImage: "globe") }
+            ProvidersTab()
+                .tabItem { Label("Providers", systemImage: "key") }
             AboutTab()
                 .tabItem { Label("About", systemImage: "info.circle") }
         }
-        .frame(width: 480, height: 420)
+        .frame(width: 480, height: 500)
     }
 }
 
@@ -53,70 +51,43 @@ private struct GeneralTab: View {
     }
 }
 
-// MARK: - API
+// MARK: - Providers
 
-private struct APITab: View {
-
-    // Model options shown in the picker.
-    private let models: [(id: String, label: String)] = [
-        ("claude-sonnet-4-6",        "claude-sonnet-4-6 (default)"),
-        ("claude-haiku-4-5-20251001", "claude-haiku-4-5-20251001 (faster / cheaper)"),
-        ("claude-opus-4-7",           "claude-opus-4-7 (most capable, slower)"),
-    ]
+private struct ProvidersTab: View {
 
     @AppStorage("defaultProvider") private var defaultProvider = "anthropic"
-    @AppStorage("selectedModel") private var selectedModel = AnthropicProvider.defaultModel
-    @State private var apiKey   = ""
-    @State private var status   = ""
 
-    private var isDefault: Bool { defaultProvider == ProviderType.anthropic.rawValue }
+    // Per-provider model selections — intentionally separate AppStorage keys.
+    @AppStorage("selectedModel_anthropic") private var anthropicModel = AnthropicProvider.defaultModel
+    @AppStorage("selectedModel_openai")    private var openAIModel    = OpenAIProvider.defaultModel
+    @AppStorage("selectedModel_google")    private var googleModel     = GoogleProvider.defaultModel
+
+    // Transient UI state — not persisted.
+    @State private var expanded:       [ProviderType: Bool]   = [:]
+    @State private var keyFields:      [ProviderType: String] = [:]   // text field value; starts empty
+    @State private var savedKeyExists: [ProviderType: Bool]   = [:]   // mirrors Keychain state
+    @State private var statuses:       [ProviderType: String] = [:]   // brief feedback messages
 
     var body: some View {
         Form {
-            Section("Anthropic API Key") {
-                SecureField("sk-ant-…", text: $apiKey)
-                HStack {
-                    Button("Save")  { saveKey() }
-                    Button("Clear") { clearKey() }
-                    Spacer()
-                    if !status.isEmpty {
-                        Text(status)
-                            .foregroundStyle(.secondary)
-                            .font(.caption)
+            // Top segmented picker — at-a-glance default provider selector.
+            Section("Default Provider") {
+                Picker("Default provider", selection: $defaultProvider) {
+                    ForEach(ProviderType.allCases, id: \.rawValue) { p in
+                        Text(shortLabel(p)).tag(p.rawValue)
                     }
                 }
-                Link("Get an API key →",
-                     destination: URL(string: "https://console.anthropic.com/")!)
-                    .font(.caption)
-            }
-            Section("Model") {
-                Picker("Model", selection: $selectedModel) {
-                    ForEach(models, id: \.id) { m in
-                        Text(m.label).tag(m.id)
-                    }
-                }
-                .pickerStyle(.menu)
+                .pickerStyle(.segmented)
+                .labelsHidden()
             }
 
-            Section("Active Provider") {
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Default provider")
-                        Text(isDefault ? "Currently: Anthropic" : "Currently: \(defaultProvider)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    if isDefault {
-                        Label("Active", systemImage: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                            .font(.callout)
-                    } else {
-                        Button("Restore as default") {
-                            defaultProvider = ProviderType.anthropic.rawValue
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
+            // One card per provider, identical in structure, data-driven.
+            ForEach(ProviderType.allCases, id: \.rawValue) { p in
+                Section {
+                    DisclosureGroup(isExpanded: expandedBinding(for: p)) {
+                        sectionBody(for: p)
+                    } label: {
+                        sectionLabel(for: p)
                     }
                 }
             }
@@ -124,230 +95,181 @@ private struct APITab: View {
         .formStyle(.grouped)
         .padding()
         .onAppear {
-            let rawKey = KeychainManager.load()
-            NSLog("CircleSearch: APITab.onAppear — KeychainManager.load() = %@",
-                  rawKey == nil ? "nil" : "loaded \(rawKey!.count) chars")
-            apiKey = rawKey ?? ""
+            setupInitialState()
+        }
+        .onChange(of: defaultProvider) { _, newValue in
+            // Expand the newly-activated section so the user sees it became active.
+            if let p = ProviderType(rawValue: newValue) {
+                withAnimation(.easeInOut(duration: 0.2)) { expanded[p] = true }
+            }
         }
     }
 
-    private func saveKey() {
-        let trimmed = apiKey.trimmingCharacters(in: .whitespaces)
-        do {
-            if trimmed.isEmpty {
-                try KeychainManager.delete()
-                status = "Cleared."
-            } else {
-                try KeychainManager.save(trimmed)
-                status = "Saved."
-            }
-        } catch {
-            status = error.localizedDescription
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { status = "" }
-    }
+    // MARK: Section label — shown in the DisclosureGroup header row
 
-    private func clearKey() {
-        apiKey = ""
-        saveKey()
-    }
-}
-
-// MARK: - OpenAI (Phase 2 temporary tab — replaced by Providers tab in Phase 4)
-
-private struct OpenAITestTab: View {
-
-    @AppStorage("defaultProvider") private var defaultProvider = "anthropic"
-    @AppStorage("selectedModel_openai") private var selectedModel = OpenAIProvider.defaultModel
-
-    @State private var apiKey = ""
-    @State private var status = ""
-
-    private var isDefault: Bool { defaultProvider == ProviderType.openai.rawValue }
-
-    var body: some View {
-        Form {
-            Section("OpenAI API Key") {
-                SecureField("sk-…", text: $apiKey)
-                HStack {
-                    Button("Save")  { saveKey() }
-                    Button("Clear") { clearKey() }
-                    Spacer()
-                    if !status.isEmpty {
-                        Text(status)
-                            .foregroundStyle(.secondary)
-                            .font(.caption)
-                    }
-                }
-                Link("Get an API key →", destination: OpenAIProvider.consoleURL)
-                    .font(.caption)
-            }
-
-            Section("Model") {
-                Picker("Model", selection: $selectedModel) {
-                    ForEach(OpenAIProvider.models, id: \.id) { m in
-                        Text(m.label).tag(m.id)
-                    }
-                }
-                .pickerStyle(.menu)
-            }
-
-            Section("Active Provider") {
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Default provider")
-                        Text(isDefault ? "Currently: OpenAI" : "Currently: \(defaultProvider)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    if isDefault {
-                        Label("Active", systemImage: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                            .font(.callout)
-                    } else {
-                        Button("Set as default") {
-                            defaultProvider = ProviderType.openai.rawValue
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                    }
-                }
-                if !isDefault {
-                    Button("Restore Anthropic as default") {
-                        defaultProvider = ProviderType.anthropic.rawValue
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+    @ViewBuilder
+    private func sectionLabel(for p: ProviderType) -> some View {
+        HStack(spacing: 6) {
+            Text(p.displayName)
+                .font(.callout.weight(.medium))
+            Spacer()
+            if defaultProvider == p.rawValue {
+                Text("active")
+                    .font(.caption2)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.accentColor.opacity(0.15))
+                    .foregroundStyle(.tint)
+                    .clipShape(Capsule())
+            } else if savedKeyExists[p] == true {
+                Text("key saved")
+                    .font(.caption2)
                     .foregroundStyle(.secondary)
-                }
             }
-        }
-        .formStyle(.grouped)
-        .padding()
-        .onAppear {
-            apiKey = KeychainManager.load(for: .openai) ?? ""
         }
     }
 
-    private func saveKey() {
-        let trimmed = apiKey.trimmingCharacters(in: .whitespaces)
-        do {
-            if trimmed.isEmpty {
-                try KeychainManager.delete(for: .openai)
-                status = "Cleared."
-            } else {
-                try KeychainManager.save(trimmed, for: .openai)
-                status = "Saved."
-            }
-        } catch {
-            status = error.localizedDescription
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { status = "" }
-    }
+    // MARK: Section body — all settings for one provider
 
-    private func clearKey() {
-        apiKey = ""
-        saveKey()
-    }
-}
+    @ViewBuilder
+    private func sectionBody(for p: ProviderType) -> some View {
+        // API key input — field intentionally starts empty; use Clear to remove existing key.
+        SecureField(keyPlaceholder(p), text: keyFieldBinding(for: p))
 
-// MARK: - Google (Phase 3 temporary tab — replaced by Providers tab in Phase 4)
-
-private struct GoogleTestTab: View {
-
-    @AppStorage("defaultProvider") private var defaultProvider = "anthropic"
-    @AppStorage("selectedModel_google") private var selectedModel = GoogleProvider.defaultModel
-
-    @State private var apiKey = ""
-    @State private var status = ""
-
-    private var isDefault: Bool { defaultProvider == ProviderType.google.rawValue }
-
-    var body: some View {
-        Form {
-            Section("Google AI API Key") {
-                SecureField("AIza…", text: $apiKey)
-                HStack {
-                    Button("Save")  { saveKey() }
-                    Button("Clear") { clearKey() }
-                    Spacer()
-                    if !status.isEmpty {
-                        Text(status)
-                            .foregroundStyle(.secondary)
-                            .font(.caption)
-                    }
-                }
-                Link("Get an API key →", destination: GoogleProvider.consoleURL)
-                    .font(.caption)
-            }
-
-            Section("Model") {
-                Picker("Model", selection: $selectedModel) {
-                    ForEach(GoogleProvider.models, id: \.id) { m in
-                        Text(m.label).tag(m.id)
-                    }
-                }
-                .pickerStyle(.menu)
-            }
-
-            Section("Active Provider") {
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Default provider")
-                        Text(isDefault ? "Currently: Google Gemini" : "Currently: \(defaultProvider)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    if isDefault {
-                        Label("Active", systemImage: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                            .font(.callout)
-                    } else {
-                        Button("Set as default") {
-                            defaultProvider = ProviderType.google.rawValue
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                    }
-                }
-                if !isDefault {
-                    Button("Restore Anthropic as default") {
-                        defaultProvider = ProviderType.anthropic.rawValue
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+        HStack(spacing: 6) {
+            Button("Save") { saveKey(for: p) }
+                .disabled(
+                    (keyFields[p] ?? "").trimmingCharacters(in: .whitespaces).isEmpty
+                )
+            Button("Clear") { clearKey(for: p) }
+                .disabled(savedKeyExists[p] != true)
+            Spacer()
+            if let status = statuses[p], !status.isEmpty {
+                Text(status)
                     .foregroundStyle(.secondary)
-                }
+                    .font(.caption)
+                    .animation(.easeInOut, value: status)
             }
         }
-        .formStyle(.grouped)
-        .padding()
-        .onAppear {
-            apiKey = KeychainManager.load(for: .google) ?? ""
+
+        Link("Get an API key →", destination: p.consoleURL)
+            .font(.caption)
+
+        // Model picker — each provider has its own AppStorage key.
+        Picker("Model", selection: modelBinding(for: p)) {
+            ForEach(p.models, id: \.id) { m in
+                Text(m.label).tag(m.id)
+            }
+        }
+        .pickerStyle(.menu)
+
+        // Default provider toggle — mirrors the top segmented picker.
+        if defaultProvider == p.rawValue {
+            Label("Currently active", systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+                .font(.callout)
+        } else {
+            Button("Set as default") {
+                defaultProvider = p.rawValue
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
         }
     }
 
-    private func saveKey() {
-        let trimmed = apiKey.trimmingCharacters(in: .whitespaces)
+    // MARK: Setup
+
+    private func setupInitialState() {
+        for p in ProviderType.allCases {
+            savedKeyExists[p] = KeychainManager.load(for: p) != nil
+        }
+
+        // Smart expansion: expand the default section only if any keys exist.
+        // If no keys are saved, expand all three to encourage first-time setup.
+        let anyKeysSaved = ProviderType.allCases.contains { savedKeyExists[$0] == true }
+        let activeType   = ProviderType(rawValue: defaultProvider) ?? .anthropic
+
+        for p in ProviderType.allCases {
+            expanded[p] = anyKeysSaved ? (p == activeType) : true
+        }
+    }
+
+    // MARK: Actions
+
+    private func saveKey(for p: ProviderType) {
+        let trimmed = (keyFields[p] ?? "").trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
         do {
-            if trimmed.isEmpty {
-                try KeychainManager.delete(for: .google)
-                status = "Cleared."
-            } else {
-                try KeychainManager.save(trimmed, for: .google)
-                status = "Saved."
+            try KeychainManager.save(trimmed, for: p)
+            savedKeyExists[p] = true
+            withAnimation { statuses[p] = "Saved." }
+            // Clear the field and fade the status after 2 s.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                keyFields[p] = ""
+                withAnimation { statuses[p] = "" }
             }
         } catch {
-            status = error.localizedDescription
+            statuses[p] = error.localizedDescription
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { status = "" }
     }
 
-    private func clearKey() {
-        apiKey = ""
-        saveKey()
+    private func clearKey(for p: ProviderType) {
+        do {
+            try KeychainManager.delete(for: p)
+            savedKeyExists[p] = false
+            keyFields[p]      = ""
+            withAnimation { statuses[p] = "Cleared." }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                withAnimation { statuses[p] = "" }
+            }
+        } catch {
+            statuses[p] = error.localizedDescription
+        }
+    }
+
+    // MARK: Bindings + helpers
+
+    private func expandedBinding(for p: ProviderType) -> Binding<Bool> {
+        Binding(
+            get: { expanded[p] ?? false },
+            set: { expanded[p] = $0 }
+        )
+    }
+
+    private func keyFieldBinding(for p: ProviderType) -> Binding<String> {
+        Binding(
+            get: { keyFields[p] ?? "" },
+            set: { keyFields[p] = $0 }
+        )
+    }
+
+    /// Returns the correct `@AppStorage` binding for each provider's model selection.
+    /// Must be a switch rather than a dictionary because `@AppStorage` bindings are
+    /// statically declared property wrappers and cannot be constructed dynamically.
+    private func modelBinding(for p: ProviderType) -> Binding<String> {
+        switch p {
+        case .anthropic: return $anthropicModel
+        case .openai:    return $openAIModel
+        case .google:    return $googleModel
+        }
+    }
+
+    /// Short labels for the segmented picker — full display names are used in section headers.
+    private func shortLabel(_ p: ProviderType) -> String {
+        switch p {
+        case .anthropic: return "Claude"
+        case .openai:    return "OpenAI"
+        case .google:    return "Gemini"
+        }
+    }
+
+    /// Placeholder text hinting at the expected key format for each provider.
+    private func keyPlaceholder(_ p: ProviderType) -> String {
+        switch p {
+        case .anthropic: return "sk-ant-…"
+        case .openai:    return "sk-…"
+        case .google:    return "AIza…"
+        }
     }
 }
 

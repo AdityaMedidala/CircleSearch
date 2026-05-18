@@ -76,6 +76,10 @@ protocol AIProvider {
     static var consoleURL: URL { get }
     static var models: [(id: String, label: String)] { get }
 
+    /// Instance-level provider identity — lets callers distinguish providers held as `any AIProvider`
+    /// without needing `type(of:)` gymnastics on existentials.
+    var providerKind: ProviderType { get }
+
     var apiKey: String { get }
     var model: String { get }
 
@@ -88,6 +92,18 @@ protocol AIProvider {
     ///   - ocrText: OCR-extracted text; included in the first user turn's prompt when non-empty.
     ///   - history: Follow-up turns after the initial analysis (assistant + user pairs).
     func stream(image: CGImage, ocrText: String, history: [ChatTurn]) -> AsyncThrowingStream<String, Error>
+}
+
+// MARK: - Provider factory
+
+/// Instantiates a provider of the given type with the supplied credentials.
+/// Centralised here so both ResultPanelController and ResultPanelModel can share it.
+func makeProvider(_ type: ProviderType, apiKey: String, model: String) -> any AIProvider {
+    switch type {
+    case .anthropic: return AnthropicProvider(apiKey: apiKey, model: model)
+    case .openai:    return OpenAIProvider(apiKey: apiKey, model: model)
+    case .google:    return GoogleProvider(apiKey: apiKey, model: model)
+    }
 }
 
 // MARK: - Shared image encoding
