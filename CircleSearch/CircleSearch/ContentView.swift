@@ -57,7 +57,7 @@ struct ContentView: View {
             .keyboardShortcut("q")
         }
         .padding()
-        .frame(width: 280)
+        .frame(width: 300)
         .onAppear { loadHistory() }
         .onReceive(NotificationCenter.default.publisher(for: .captureHistorySaved)) { _ in
             loadHistory()
@@ -112,8 +112,8 @@ private struct CaptureHistoryRow: View {
                     .fill(.secondary.opacity(0.2))
             }
         }
-        .frame(width: 32, height: 32)
-        .clipShape(RoundedRectangle(cornerRadius: 4))
+        .frame(width: 64, height: 48)
+        .clipShape(RoundedRectangle(cornerRadius: 5))
     }
 
     private var ocrSnippet: String {

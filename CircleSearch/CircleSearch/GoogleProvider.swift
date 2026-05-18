@@ -83,16 +83,20 @@ struct GoogleProvider: AIProvider {
     // MARK: Private — body building
 
     private func buildBody(image: CGImage, ocrText: String, history: [ChatTurn]) throws -> GRequest {
+        let closing = history.isEmpty
+            ? "Please analyze the captured content above."
+            : "The above is the screen capture for reference."
+
         let promptText: String
         if ocrText.isEmpty {
-            promptText = "Please analyze the captured content above."
+            promptText = closing
         } else {
             promptText = """
             Here is text extracted from the screen capture via OCR (use this to verify exact \
             wording, codes, or details that may be unclear in the image):
             \(ocrText)
 
-            Please analyze the captured content above.
+            \(closing)
             """
         }
 
@@ -163,13 +167,16 @@ struct GoogleProvider: AIProvider {
     // MARK: System prompt
 
     private static let systemPrompt = """
-        You are CircleSearch, a visual assistant. The user captured a region of their screen. \
-        Analyze what they captured and provide the most useful response — explain code, summarize \
-        text, translate, solve math, identify UIs, answer questions about charts or images. Be \
-        concise. If the content is code, identify the language and explain or fix as appropriate. \
-        If it's an error message, diagnose it and suggest a fix. If it's a chart or diagram, \
-        explain what it shows. If it's a UI mockup, describe the design and propose how to build \
-        it. Default to a 2-4 sentence response unless the user asks for more.
+        You are an AI assistant helping the user understand and explore content from their screen. \
+        They've captured a region of their screen and may ask questions about it.
+
+        For initial analysis: provide a clear, useful summary of what's in the capture.
+
+        For follow-up questions: use your general knowledge to help the user. The captured content \
+        is context, not a constraint. If they ask about related topics not visible in the capture, \
+        answer from your training knowledge while staying helpful.
+
+        Format responses with markdown when helpful (headers, lists, code blocks). Be concise but thorough.
         """
 }
 

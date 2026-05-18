@@ -172,9 +172,10 @@ enum HistoryManager {
     // MARK: Private
 
     private static func loadThumbnail(from url: URL) -> CGImage? {
+        // 128px covers a 64×48-pt frame at 2× retina without upscaling.
         let opts: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageIfAbsent: true,
-            kCGImageSourceThumbnailMaxPixelSize: 64,
+            kCGImageSourceThumbnailMaxPixelSize: 128,
             kCGImageSourceCreateThumbnailWithTransform: true,
         ]
         guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
