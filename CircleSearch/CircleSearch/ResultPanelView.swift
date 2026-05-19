@@ -217,7 +217,7 @@ struct ResultPanelView: View {
                         .padding(16)
                     } else {
                         Markdown(model.aiResponse.isEmpty ? "\u{200B}" : model.aiResponse)
-                            .markdownTheme(.gitHub)
+                            .markdownTheme(.circleSearch)
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(16)
@@ -250,16 +250,14 @@ struct ResultPanelView: View {
     }
 
     private func errorView(_ message: String) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
-            Text(message)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
+        let providerKind = model.currentProvider?.providerKind
+        return StreamErrorView(
+            message:         message,
+            providerName:    providerKind.map(shortProviderLabel) ?? "AI",
+            consoleURL:      providerKind?.consoleURL,
+            onRetry:         { model.retryAnalysis() },
+            onOpenSettings:  { SettingsWindowController.shared.show() }
+        )
     }
 
     // MARK: Read-only indicators
@@ -392,6 +390,141 @@ struct ResultPanelView: View {
     }
 }
 
+// MARK: - StreamErrorView
+
+/// Polished error display with classified error type, tailored copy, and action button.
+private struct StreamErrorView: View {
+    let message:        String
+    let providerName:   String
+    let consoleURL:     URL?
+    let onRetry:        () -> Void
+    let onOpenSettings: () -> Void
+
+    @State private var showDetail = false
+
+    // MARK: Error classification
+
+    private enum ErrorKind {
+        case outOfCredits
+        case invalidKey
+        case networkError
+        case unknown(String)
+    }
+
+    private var kind: ErrorKind {
+        let lower = message.lowercased()
+        if lower.contains("credit balance") || lower.contains("exceeded your current quota") ||
+           (lower.contains("billing") && lower.contains("error")) {
+            return .outOfCredits
+        }
+        if lower.contains("invalid api key") || lower.contains("access denied") ||
+           lower.contains("authentication") {
+            return .invalidKey
+        }
+        if lower.contains("offline") || lower.contains("timed out") ||
+           lower.contains("network connection") || lower.contains("internet connection") ||
+           lower.contains("connection was lost") {
+            return .networkError
+        }
+        return .unknown(message)
+    }
+
+    // MARK: Body
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: iconName)
+                    .font(.title3)
+                    .foregroundStyle(iconColor)
+                    .frame(width: 22, alignment: .center)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            actionButton
+                .padding(.leading, 32)   // align under text, not icon
+
+            if case .unknown(let msg) = kind, msg.count > 80 {
+                DisclosureGroup("Show details", isExpanded: $showDetail) {
+                    Text(msg)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 4)
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.leading, 32)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+    }
+
+    // MARK: Derived properties
+
+    private var iconName: String {
+        switch kind {
+        case .outOfCredits: return "creditcard.trianglebadge.exclamationmark"
+        case .invalidKey:   return "key.slash"
+        case .networkError: return "wifi.slash"
+        case .unknown:      return "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var iconColor: Color {
+        switch kind {
+        case .invalidKey: return .red
+        default:          return .orange
+        }
+    }
+
+    private var title: String {
+        switch kind {
+        case .outOfCredits: return "Out of \(providerName) credits"
+        case .invalidKey:   return "API key issue with \(providerName)"
+        case .networkError: return "Connection problem"
+        case .unknown:      return "Something went wrong"
+        }
+    }
+
+    private var subtitle: String {
+        switch kind {
+        case .outOfCredits: return "Add credits or switch providers using the picker above."
+        case .invalidKey:   return "The saved key appears invalid. Update it in Settings."
+        case .networkError: return "Check your internet connection and try again."
+        case .unknown(let msg):
+            return msg.count > 80 ? String(msg.prefix(80)) + "…" : msg
+        }
+    }
+
+    @ViewBuilder
+    private var actionButton: some View {
+        if case .outOfCredits = kind, let url = consoleURL {
+            Link("Get credits →", destination: url)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(Color.purple)
+        } else if case .invalidKey = kind {
+            Button("Open Settings") { onOpenSettings() }
+                .buttonStyle(.link)
+                .font(.caption.weight(.medium))
+        } else if case .networkError = kind {
+            Button("Retry") { onRetry() }
+                .buttonStyle(.link)
+                .font(.caption.weight(.medium))
+        }
+    }
+}
+
 // MARK: - ProviderOnboardingCard
 
 private struct ProviderOnboardingCard: View {
@@ -456,4 +589,136 @@ private struct ProviderOnboardingCard: View {
         case .google:    return URL(string: "https://aistudio.google.com/app/apikey")!
         }
     }
+}
+
+// MARK: - Adaptive color helpers (light + dark mode)
+
+/// Dynamic NSColor-backed Colors that adapt to the system appearance.
+/// Used by Theme.circleSearch for code blocks so the panel looks right in both modes.
+private extension Color {
+    /// Code block container background — near-black in dark mode, near-white in light.
+    static let codeBlockBackground = Color(NSColor(name: nil) { a in
+        a.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(white: 0.10, alpha: 1)
+            : NSColor(white: 0.88, alpha: 1)
+    })
+    /// Code block border — subtle in both modes.
+    static let codeBlockBorder = Color(NSColor(name: nil) { a in
+        a.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(white: 0.28, alpha: 1)
+            : NSColor(white: 0.72, alpha: 1)
+    })
+    /// Inline code chip background — slightly tinted in both modes.
+    static let inlineCodeBackground = Color(NSColor(name: nil) { a in
+        a.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(white: 0.16, alpha: 1)
+            : NSColor(white: 0.84, alpha: 1)
+    })
+}
+
+// MARK: - MarkdownUI custom theme
+
+extension Theme {
+    /// Dark-panel–friendly theme with adaptive light-mode variants.
+    static let circleSearch = Theme()
+
+        // Body text — adaptive primary colour, 14 pt SF Pro.
+        .text {
+            ForegroundColor(.primary)
+            FontSize(14)
+        }
+
+        // Links — purple accent, visible in both modes.
+        .link {
+            ForegroundColor(Color.purple)
+        }
+
+        // Inline code chip.
+        .code {
+            ForegroundColor(.primary)
+            BackgroundColor(.inlineCodeBackground)
+            FontFamilyVariant(.monospaced)
+            FontSize(12)
+        }
+
+        // Fenced code block — scrollable, with corner radius and border.
+        .codeBlock { config in
+            ScrollView(.horizontal, showsIndicators: false) {
+                config.label
+                    .relativeLineSpacing(.em(0.3))
+                    .markdownTextStyle {
+                        FontFamilyVariant(.monospaced)
+                        FontSize(13)
+                        ForegroundColor(.primary)
+                    }
+                    .padding(12)
+            }
+            .background(Color.codeBlockBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.codeBlockBorder, lineWidth: 1)
+            )
+            .markdownMargin(top: 6, bottom: 6)
+        }
+
+        // Blockquote — purple left bar, muted italic text, 8 pt left indent.
+        .blockquote { config in
+            HStack(spacing: 0) {
+                Color.purple.opacity(0.75)
+                    .frame(width: 3)
+                    .clipShape(Capsule())
+                config.label
+                    .markdownTextStyle {
+                        ForegroundColor(.secondary)
+                        FontStyle(.italic)
+                    }
+                    .padding(.leading, 8)
+            }
+            .markdownMargin(top: 4, bottom: 4)
+        }
+
+        // Headings — bold/semibold with generous top spacing for hierarchy.
+        .heading1 { config in
+            config.label
+                .markdownTextStyle {
+                    FontWeight(.bold)
+                    FontSize(24)
+                    ForegroundColor(.primary)
+                }
+                .markdownMargin(top: 16, bottom: 6)
+        }
+        .heading2 { config in
+            config.label
+                .markdownTextStyle {
+                    FontWeight(.semibold)
+                    FontSize(20)
+                    ForegroundColor(.primary)
+                }
+                .markdownMargin(top: 16, bottom: 4)
+        }
+        .heading3 { config in
+            config.label
+                .markdownTextStyle {
+                    FontWeight(.semibold)
+                    FontSize(17)
+                    ForegroundColor(.primary)
+                }
+                .markdownMargin(top: 14, bottom: 4)
+        }
+        .heading4 { config in
+            config.label
+                .markdownTextStyle {
+                    FontWeight(.semibold)
+                    FontSize(15)
+                    ForegroundColor(.primary)
+                }
+                .markdownMargin(top: 12, bottom: 4)
+        }
+
+        // Horizontal rule — thin separator with vertical breathing room.
+        .thematicBreak {
+            Divider()
+                .padding(.vertical, 8)
+        }
 }

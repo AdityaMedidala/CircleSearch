@@ -105,6 +105,14 @@ final class ResultPanelModel {
         startInitialAnalysis()
     }
 
+    /// Clears any previous response/error and re-runs the initial analysis.
+    /// Called by the error view's Retry button.
+    func retryAnalysis() {
+        aiResponse  = ""
+        streamError = nil
+        startInitialAnalysis()
+    }
+
     func cancel() {
         streamTask?.cancel()
         streamTask = nil

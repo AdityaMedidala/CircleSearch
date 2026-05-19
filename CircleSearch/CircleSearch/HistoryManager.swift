@@ -83,7 +83,7 @@ enum HistoryManager {
 
     /// Returns up to `limit` entries sorted newest-first.
     /// Loads 64-pt thumbnails for each entry so callers can display them without further I/O.
-    static func loadRecent(limit: Int = 10) -> [CaptureEntry] {
+    nonisolated static func loadRecent(limit: Int = 10) -> [CaptureEntry] {
         let dir = historyDirectory
         guard let files = try? FileManager.default.contentsOfDirectory(
             at: dir, includingPropertiesForKeys: nil
@@ -122,10 +122,21 @@ enum HistoryManager {
             .map { $0 }
     }
 
+    // MARK: Count
+
+    /// Returns the total number of saved entries without loading their full content.
+    nonisolated static func countAll() -> Int {
+        let dir = historyDirectory
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: nil
+        ) else { return 0 }
+        return files.filter { $0.pathExtension == "json" }.count
+    }
+
     // MARK: Delete
 
     /// Removes both the .png and .json files for the given entry id.
-    static func delete(id: UUID) throws {
+    nonisolated static func delete(id: UUID) throws {
         let dir  = historyDirectory
         let base = id.uuidString
         for ext in ["json", "png"] {

@@ -4,6 +4,7 @@ import KeyboardShortcuts
 struct ContentView: View {
 
     @State private var history: [CaptureEntry] = []
+    @State private var totalCount: Int = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -47,6 +48,22 @@ struct ContentView: View {
                         .buttonStyle(.plain)
                     }
                 }
+
+                if totalCount > 4 {
+                    Button {
+                        HistoryWindowController.shared.show()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text("Show all (\(totalCount))")
+                                .font(.callout)
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                        }
+                        .foregroundColor(.accentColor)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 4)
+                }
             }
 
             Divider()
@@ -66,8 +83,12 @@ struct ContentView: View {
 
     private func loadHistory() {
         Task.detached(priority: .userInitiated) {
-            let entries = HistoryManager.loadRecent(limit: 10)
-            await MainActor.run { history = entries }
+            let entries = HistoryManager.loadRecent(limit: 4)
+            let count   = HistoryManager.countAll()
+            await MainActor.run {
+                history    = entries
+                totalCount = count
+            }
         }
     }
 
